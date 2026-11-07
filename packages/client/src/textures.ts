@@ -1,0 +1,127 @@
+import { Graphics, Rectangle, type Renderer, type Texture } from 'pixi.js';
+
+/** Source pixel size of every tile; drawn at 3x on screen. */
+export const SRC = 16;
+
+export interface Textures {
+  floor: Texture[];
+  wall: Texture;
+  stairs: Texture;
+  stairsClosed: Texture;
+  sunshaft: Texture;
+  heartstone: Texture;
+  trap: Texture;
+  critter: Texture;
+  shadow: Texture;
+  star: Texture;
+  lantern: Texture;
+}
+
+/** Placeholder pixel art drawn in code until the CC0 tileset goes in (M5). */
+export function makeTextures(renderer: Renderer): Textures {
+  const bake = (draw: (g: Graphics) => void): Texture => {
+    const g = new Graphics();
+    draw(g);
+    return renderer.generateTexture({ target: g, frame: new Rectangle(0, 0, SRC, SRC), resolution: 1 });
+  };
+  const px = (g: Graphics, x: number, y: number, color: number, w = 1, h = 1) => g.rect(x, y, w, h).fill(color);
+
+  const floorBase = (g: Graphics) => px(g, 0, 0, 0x7a5a3c, SRC, SRC);
+  const specks: [number, number][][] = [
+    [[3, 4], [11, 2], [7, 10], [13, 13], [2, 12]],
+    [[5, 6], [12, 9], [9, 3], [3, 14]],
+    [[2, 2], [10, 7], [6, 13], [14, 5], [8, 8]],
+  ];
+  const floor = specks.map((set, v) =>
+    bake((g) => {
+      floorBase(g);
+      for (const [x, y] of set) px(g, x, y, v === 1 ? 0x8c6a48 : 0x664a30);
+      if (v === 2) px(g, 11, 12, 0x8fa860, 2, 1); // a tiny sprout
+    }),
+  );
+
+  const wall = bake((g) => {
+    px(g, 0, 0, 0x3e2f2a, SRC, SRC);
+    px(g, 0, 0, 0x5c4436, SRC, 4); // top face catches the lantern light
+    px(g, 0, 8, 0x33261f, SRC, 1);
+    px(g, 0, 12, 0x33261f, SRC, 1);
+    px(g, 5, 4, 0x33261f, 1, 4);
+    px(g, 11, 8, 0x33261f, 1, 4);
+    px(g, 3, 12, 0x33261f, 1, 4);
+    px(g, 9, 5, 0x6f8a4a, 2, 1); // root / moss
+  });
+
+  const stairs = bake((g) => {
+    floorBase(g);
+    px(g, 3, 2, 0x2a1f1a, 10, 12);
+    px(g, 4, 2, 0xd9b77e, 1, 12);
+    px(g, 11, 2, 0xd9b77e, 1, 12);
+    for (const y of [4, 7, 10, 13]) px(g, 4, y, 0xd9b77e, 8, 1);
+  });
+
+  const stairsClosed = bake((g) => {
+    floorBase(g);
+    px(g, 3, 3, 0x8b5a2b, 10, 10); // wooden hatch
+    px(g, 3, 6, 0x6e4520, 10, 1);
+    px(g, 3, 9, 0x6e4520, 10, 1);
+    px(g, 7, 7, 0xd9b77e, 2, 2); // latch
+  });
+
+  const sunshaft = bake((g) => {
+    px(g, 0, 0, 0xb08a4c, SRC, SRC);
+    for (const [x, y] of [[2, 3], [9, 1], [12, 10], [5, 12], [7, 6]] as const) px(g, x, y, 0xf6dc8a);
+    px(g, 3, 0, 0xe8c67a, 2, SRC); // light rays
+    px(g, 10, 0, 0xe8c67a, 2, SRC);
+  });
+
+  const heartstone = bake((g) => {
+    floorBase(g);
+    px(g, 3, 11, 0x8a8090, 10, 4); // pedestal
+    px(g, 4, 10, 0x9d93a3, 8, 1);
+    px(g, 6, 3, 0x9fe3ff, 4, 7); // crystal
+    px(g, 7, 2, 0xc8f1ff, 2, 1);
+    px(g, 7, 4, 0xe6fbff, 1, 3);
+  });
+
+  const trap = bake((g) => {
+    floorBase(g);
+    px(g, 3, 6, 0x6b6460, 10, 4); // snap trap base
+    for (const x of [3, 5, 7, 9, 11]) {
+      px(g, x, 4, 0xd8d0c4, 1, 2); // teeth
+      px(g, x, 10, 0xd8d0c4, 1, 2);
+    }
+    px(g, 7, 7, 0xe07a5f, 2, 2); // trigger
+  });
+
+  const star = bake((g) => {
+    px(g, 7, 5, 0xffe066, 2, 6);
+    px(g, 5, 7, 0xffe066, 6, 2);
+    px(g, 6, 6, 0xfff3b0, 4, 4);
+  });
+
+  const lantern = bake((g) => {
+    px(g, 6, 3, 0x6b5446, 4, 1); // handle
+    px(g, 5, 4, 0x8b6a4a, 6, 2);
+    px(g, 5, 6, 0xf2cc8f, 6, 6); // glass
+    px(g, 7, 7, 0xffa040, 2, 3); // flame
+    px(g, 5, 12, 0x8b6a4a, 6, 1);
+  });
+
+  // White so it can be tinted with each player's color.
+  const critter = bake((g) => {
+    px(g, 4, 2, 0xffffff, 2, 4); // ears
+    px(g, 10, 2, 0xffffff, 2, 4);
+    g.roundRect(3, 5, 10, 9, 3).fill(0xffffff);
+    px(g, 6, 8, 0x2a1f1a, 1, 2); // eyes
+    px(g, 9, 8, 0x2a1f1a, 1, 2);
+    px(g, 7, 11, 0x2a1f1a, 2, 1); // little smile
+    px(g, 4, 10, 0xffc4b0, 1, 1); // cheeks
+    px(g, 11, 10, 0xffc4b0, 1, 1);
+  });
+
+  const shadow = bake((g) => {
+    g.ellipse(8, 14, 6, 2).fill({ color: 0x000000, alpha: 0.3 });
+  });
+
+  return { floor, wall, stairs, stairsClosed, sunshaft, heartstone, trap, critter, shadow, star, lantern };
+}
