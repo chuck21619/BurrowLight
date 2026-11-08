@@ -162,7 +162,7 @@ export class Room {
     }
     const pos = this.positions();
     const tiles = packTiles(game, game.newlyExplored);
-    const heartCharge = game.hearts.map((h) => h.charge);
+    const heartCharge = game.hearts.map((h) => Math.round(h.charge * 10) / 10);
     const mirrors = packMirrors(game);
     for (const m of this.members.values()) {
       const p = game.players.get(m.id);
@@ -226,7 +226,7 @@ export class Room {
       tiles: packTiles(game, allExplored(game)),
       ack: game.players.get(m.id)?.lastAck ?? 0,
       hearts: game.hearts.map((h) => heartIndex(game, h)),
-      heartCharge: game.hearts.map((h) => h.charge),
+      heartCharge: game.hearts.map((h) => Math.round(h.charge * 10) / 10),
       traps: [...game.revealedTraps],
       open: game.exitOpen,
       runOver: game.runOver,

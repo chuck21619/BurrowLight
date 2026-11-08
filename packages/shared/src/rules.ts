@@ -53,8 +53,15 @@ export const GLOOM_STEP_RESTLESS = 2;
 export const GLOOM_STEP_RESTLESS_LIT = 4;
 /** While pinned in a sunbeam it wriggles one tile every this many ticks: 4 s, then 3 s, then 2 s. */
 export const GLOOM_WRIGGLE = [40, 30, 20] as const;
-/** Charge drained per tick while the Gloom touches the Great Heartstone. */
-export const GLOOM_DRAIN = 3;
+/**
+ * While free, the Gloom drains the Great Heartstone through its tether, faster the closer it is:
+ * 3 per tick when touching it, down to 0.25 per tick at 12 or more tiles away.
+ */
+export const GLOOM_DRAIN_NEAR = 3;
+export const GLOOM_DRAIN_FAR = 0.25;
+export const GLOOM_DRAIN_RANGE = 12;
+export const gloomDrain = (distance: number): number =>
+  GLOOM_DRAIN_FAR + (GLOOM_DRAIN_NEAR - GLOOM_DRAIN_FAR) * (1 - Math.min(distance, GLOOM_DRAIN_RANGE) / GLOOM_DRAIN_RANGE);
 /** A critter it touches can't be touched again for this long. */
 export const GLOOM_TOUCH_COOLDOWN = 20;
 /** The Great Heartstone needs four times a normal one: 12 s of two lanterns while the Gloom is pinned. */

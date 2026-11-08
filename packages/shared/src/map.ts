@@ -464,6 +464,35 @@ function tryBossRoom(rng: Rng): FloorMap | null {
   const d = distanceMap(tiles, w, h, entrance);
   for (let i = 0; i < tiles.length; i++) if (isWalkable(tiles[i]!) && d[i]! < 0) return null;
 
+  // Guarantee: wherever the Gloom ends up touching the Great Heartstone, some mirror setting swings
+  // a sunbeam through it. Add mirrors on beam-reachable tiles until every such spot is covered.
+  const goals = gloomGoalSpots(w, h, tiles, heart);
+  const covered = () => {
+    const reach = beamReach(w, h, tiles, emitters, new Set(mirrors.map((m) => m.y * w + m.x)));
+    return goals.filter((foot) => foot.some((i) => reach.has(i))).length;
+  };
+  let have = covered();
+  for (let added = 0; added < 6 && have < goals.length; added++) {
+    const reach = beamReach(w, h, tiles, emitters, new Set(mirrors.map((m) => m.y * w + m.x)));
+    let bestTile = -1;
+    let bestHave = have;
+    for (const i of reach) {
+      if (tiles[i] !== Tile.Floor || reserved.has(i)) continue;
+      mirrors.push({ x: i % w, y: Math.floor(i / w), orient: 0 });
+      const n = covered();
+      mirrors.pop();
+      if (n > bestHave) {
+        bestHave = n;
+        bestTile = i;
+      }
+    }
+    if (bestTile < 0) break;
+    mirrors.push({ x: bestTile % w, y: Math.floor(bestTile / w), orient: rng.int(0, 1) as MirrorOrient });
+    reserved.add(bestTile);
+    have = bestHave;
+  }
+  if (goals.length === 0 || have < goals.length) return null;
+
   // The Gloom starts far from the Great Heartstone and the party, outside any starting beam.
   const mset = new Map(mirrors.map((m) => [m.y * w + m.x, m.orient]));
   const cell = (x: number, y: number) => beamCellOf(tiles[y * w + x]!);
@@ -491,6 +520,53 @@ function tryBossRoom(rng: Rng): FloorMap | null {
     mirrors,
     gloomStart: rng.pick(starts),
   };
+}
+
+/** Every 2×2 spot (as its four tiles) where the Gloom would be touching the Heartstone. */
+export function gloomGoalSpots(w: number, h: number, tiles: Uint8Array, heart: Point): number[][] {
+  const spots: number[][] = [];
+  for (let y = heart.y - 2; y <= heart.y + 1; y++)
+    for (let x = heart.x - 2; x <= heart.x + 1; x++) {
+      if (x < 1 || y < 1 || x + 1 >= w - 1 || y + 1 >= h - 1) continue;
+      const foot = [y * w + x, y * w + x + 1, (y + 1) * w + x, (y + 1) * w + x + 1];
+      if (foot.every((i) => isWalkable(tiles[i]!))) spots.push(foot);
+    }
+  return spots;
+}
+
+/**
+ * Every tile some setting of the mirrors could send a sunbeam through: beams are followed through
+ * each mirror both ways at once. (Slightly generous when one mirror is hit twice; fine for checks.)
+ */
+export function beamReach(w: number, h: number, tiles: Uint8Array, emitters: Emitter[], mirrors: Set<number>): Set<number> {
+  const lit = new Set<number>();
+  const seen = new Set<number>();
+  const stack: [number, number, number, number][] = emitters.map((e) => [e.x, e.y, e.dx, e.dy]);
+  for (const e of emitters) lit.add(e.y * w + e.x);
+  while (stack.length) {
+    let [x, y, dx, dy] = stack.pop()!;
+    for (;;) {
+      x += dx;
+      y += dy;
+      if (x < 0 || y < 0 || x >= w || y >= h) break;
+      const c = beamCellOf(tiles[y * w + x]!);
+      if (c === 'wall') break;
+      const i = y * w + x;
+      lit.add(i);
+      if (c === 'absorb') break;
+      const key = i * 8 + (dx + 1) + (dy + 1) * 3;
+      if (seen.has(key)) break;
+      seen.add(key);
+      if (mirrors.has(i)) {
+        for (const o of [0, 1] as MirrorOrient[]) {
+          const [rx, ry] = reflect(dx, dy, o);
+          stack.push([x, y, rx, ry]);
+        }
+        break;
+      }
+    }
+  }
+  return lit;
 }
 
 /** Breadth-first path distance from `from` over walkable tiles; -1 = unreachable. */

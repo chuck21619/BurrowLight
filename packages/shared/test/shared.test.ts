@@ -17,7 +17,11 @@ import {
   MAX_OIL,
   gloomFootprint,
   GREAT_HEART_FULL,
-  GLOOM_DRAIN,
+  GLOOM_DRAIN_NEAR,
+  GLOOM_DRAIN_FAR,
+  gloomDrain,
+  gloomGoalSpots,
+  beamReach,
   GLOOM_WRIGGLE,
   traceBeam,
   beamCellOf,
@@ -570,7 +574,52 @@ describe('the Gloom', () => {
     const before = heart.charge;
     step(game);
     expect(game.gloom!.touching).toBe(true);
-    expect(heart.charge).toBe(before - GLOOM_DRAIN);
+    expect(heart.charge).toBeCloseTo(before - GLOOM_DRAIN_NEAR);
+  });
+
+  it('the tether drains fast up close and slowly from far away', () => {
+    expect(gloomDrain(0)).toBe(GLOOM_DRAIN_NEAR);
+    expect(gloomDrain(99)).toBe(GLOOM_DRAIN_FAR);
+    expect(gloomDrain(3)).toBeGreaterThan(gloomDrain(8));
+    const game = bossGame();
+    park(game);
+    game.hearts[0]!.charge = 100;
+    const d = game.gloom!.distance;
+    step(game);
+    park(game);
+    if (!game.gloom!.pinned) expect(game.hearts[0]!.charge).toBeCloseTo(100 - gloomDrain(game.gloom!.distance), 5);
+    expect(d).toBeGreaterThan(0);
+  });
+
+  it('exact check on sample rooms: a real mirror setting pins the Gloom at every spot by the Great Heartstone', () => {
+    for (let seed = 1; seed <= 12; seed++) {
+      const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }], 3);
+      const { map } = game;
+      const keys = [...game.mirrors.keys()];
+      const cell = (x: number, y: number) => beamCellOf(map.tiles[y * map.w + x] ?? Tile.Wall);
+      for (const foot of gloomGoalSpots(map.w, map.h, map.tiles, map.hearts[0]!)) {
+        const inFoot = (i: number) => foot.includes(i);
+        let pinned = false;
+        for (let mask = 0; mask < 1 << keys.length && !pinned; mask++) {
+          const set = new Map(keys.map((i, k) => [i, ((mask >> k) & 1) as 0 | 1]));
+          pinned = map.emitters.some((e) => traceBeam(map.w, map.h, cell, e, (i) => set.get(i), inFoot).some(inFoot));
+        }
+        expect(pinned, `seed ${seed}`).toBe(true);
+      }
+    }
+  });
+
+  it('wherever the Gloom touches the Great Heartstone, some mirror setting can pin it there', () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      for (const floor of [3, 6, 9]) {
+        const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }], floor);
+        const { map } = game;
+        const goals = gloomGoalSpots(map.w, map.h, map.tiles, map.hearts[0]!);
+        const reach = beamReach(map.w, map.h, map.tiles, map.emitters, new Set(game.mirrors.keys()));
+        expect(goals.length).toBeGreaterThan(0);
+        for (const foot of goals) expect(foot.some((i) => reach.has(i)), `seed ${seed} floor ${floor}`).toBe(true);
+      }
+    }
   });
 
   it('a sunbeam through it pins it, cuts the tether so light charges the stone, and it wriggles free a tile at a time', () => {

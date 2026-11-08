@@ -809,8 +809,9 @@ export class GameView {
       t.quadraticCurveTo(qx, qy, cx, cy);
       t.stroke({ color, width, alpha, cap: 'round' });
     }
-    // Wisps of light flowing from the stone into the Gloom.
-    const speed = g.touching ? 450 : 900;
+    // Wisps of light flowing from the stone into the Gloom: faster the closer it is (it drains faster).
+    const tiles = Math.max(0, len / TILE - 1.5);
+    const speed = 350 + 1100 * Math.min(1, tiles / 12);
     for (let n = 0; n < 6; n++) {
       const p = (now / speed + n / 6) % 1;
       const u = 1 - p;

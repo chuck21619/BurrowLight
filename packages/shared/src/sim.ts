@@ -15,7 +15,7 @@ import {
   START_OIL,
   SUNSHAFT_RADIUS,
   BEAM_STRENGTH,
-  GLOOM_DRAIN,
+  gloomDrain,
   GLOOM_STEP,
   GLOOM_STEP_LIT,
   GLOOM_STEP_RESTLESS,
@@ -84,8 +84,10 @@ export interface GloomState {
   dy: number;
   /** 0, 1 or 2: speeds up as the Great Heartstone fills. */
   restless: number;
-  /** Touching the Great Heartstone: draining it. */
+  /** Touching the Great Heartstone. */
   touching: boolean;
+  /** Tiles between it and the Great Heartstone (0 = touching): the tether drains faster up close. */
+  distance: number;
 }
 
 export interface HeartState {
@@ -175,7 +177,17 @@ function enterFloor(state: GameState, n: number): void {
   state.newlyRevealed = [];
   state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0, max: map.gloomStart ? GREAT_HEART_FULL : HEART_FULL }));
   state.gloom = map.gloomStart
-    ? { ...map.gloomStart, pinned: false, nextStepAt: state.tick + 20, nextWriggleAt: 0, dx: 0, dy: 0, restless: 0, touching: false }
+    ? {
+        ...map.gloomStart,
+        pinned: false,
+        nextStepAt: state.tick + 20,
+        nextWriggleAt: 0,
+        dx: 0,
+        dy: 0,
+        restless: 0,
+        touching: false,
+        distance: GLOOM_DRAIN_FAR_DISTANCE,
+      }
     : null;
   state.exitOpen = false;
   state.mirrors = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
@@ -288,8 +300,8 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   for (const h of state.hearts) {
     const light = state.light.level[h.y * state.map.w + h.x]!;
     if (g && !g.pinned) {
-      // The Gloom siphons off every bit of light poured in, and drains the stone while touching it.
-      if (g.touching) h.charge = Math.max(0, h.charge - GLOOM_DRAIN);
+      // The tether siphons off every bit of light poured in, and drains the stone: fast up close, slow far away.
+      h.charge = Math.max(0, h.charge - gloomDrain(g.distance));
     } else {
       h.charge = light > 0 ? Math.min(h.max, h.charge + light) : Math.max(0, h.charge - HEART_FADE);
     }
@@ -371,6 +383,8 @@ export function lightSources(state: GameState): LightSource[] {
   return out;
 }
 
+const GLOOM_DRAIN_FAR_DISTANCE = 99;
+
 /** The four tiles the Gloom covers. */
 export function gloomFootprint(w: number, x: number, y: number): number[] {
   return [y * w + x, y * w + x + 1, (y + 1) * w + x, (y + 1) * w + x + 1];
@@ -399,12 +413,17 @@ function updateGloom(state: GameState): boolean {
   const beamSet = new Set(state.beams.flat());
   const valid = (x: number, y: number) => gloomFootprint(w, x, y).every((i) => isWalkable(map.tiles[i]!));
   const clear = (x: number, y: number) => gloomFootprint(w, x, y).every((i) => !beamSet.has(i));
-  const touchesHeart = (x: number, y: number) =>
-    gloomFootprint(w, x, y).some((i) => Math.max(Math.abs((i % w) - heart.x), Math.abs(Math.floor(i / w) - heart.y)) <= 1);
+  const heartDistance = (x: number, y: number) =>
+    Math.max(0, Math.min(...gloomFootprint(w, x, y).map((i) => Math.max(Math.abs((i % w) - heart.x), Math.abs(Math.floor(i / w) - heart.y)))) - 1);
+  const touchesHeart = (x: number, y: number) => heartDistance(x, y) === 0;
+  const settle = () => {
+    g.touching = touchesHeart(g.x, g.y);
+    g.distance = heartDistance(g.x, g.y);
+  };
 
   const wasPinned = g.pinned;
   g.pinned = !clear(g.x, g.y);
-  g.touching = touchesHeart(g.x, g.y);
+  settle();
   if (g.pinned) {
     if (!wasPinned) g.nextWriggleAt = state.tick + GLOOM_WRIGGLE[g.restless]!;
     if (state.tick < g.nextWriggleAt) return false;
@@ -417,7 +436,7 @@ function updateGloom(state: GameState): boolean {
     g.x += pick[0];
     g.y += pick[1];
     [g.dx, g.dy] = pick;
-    g.touching = touchesHeart(g.x, g.y);
+    settle();
     return true;
   }
   if (state.tick < g.nextStepAt) return false;
@@ -462,7 +481,7 @@ function updateGloom(state: GameState): boolean {
   g.x += best[0];
   g.y += best[1];
   [g.dx, g.dy] = best;
-  g.touching = touchesHeart(g.x, g.y);
+  settle();
   return true;
 }
 
