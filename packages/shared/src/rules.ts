@@ -9,7 +9,11 @@ export const ActionCost = {
   wait: 1,
   blockedMove: 1,
   rotate: 2,
+  burrow: 2,
 } as const;
+
+/** Digging a tunnel under soft soil takes 3 s, standing still. */
+export const DIG_TICKS = 30;
 
 export const BASE_SPEED = 100;
 
@@ -101,13 +105,30 @@ export const DIRS = {
 export type Dir = keyof typeof DIRS;
 export const isDir = (d: unknown): d is Dir => typeof d === 'string' && Object.hasOwn(DIRS, d);
 
-/** `rotate` turns the mirror you're standing on. */
-export type Action = { kind: 'move'; dir: Dir } | { kind: 'wait' } | { kind: 'rotate' };
+export type CardinalDir = 'n' | 's' | 'e' | 'w';
+export const isCardinal = (d: unknown): d is CardinalDir => d === 'n' || d === 's' || d === 'e' || d === 'w';
+
+/**
+ * `rotate` turns the mirror you're standing on. `dig` starts a tunnel under the soft soil next to you
+ * in that direction. `burrow` travels through your tunnel when you stand on one of its ends.
+ */
+export type Action =
+  | { kind: 'move'; dir: Dir }
+  | { kind: 'wait' }
+  | { kind: 'rotate' }
+  | { kind: 'dig'; dir: CardinalDir }
+  | { kind: 'burrow' };
 
 export function isAction(a: unknown): a is Action {
   if (typeof a !== 'object' || a === null) return false;
   const o = a as { kind?: unknown; dir?: unknown };
-  return o.kind === 'wait' || o.kind === 'rotate' || (o.kind === 'move' && isDir(o.dir));
+  return (
+    o.kind === 'wait' ||
+    o.kind === 'rotate' ||
+    o.kind === 'burrow' ||
+    (o.kind === 'move' && isDir(o.dir)) ||
+    (o.kind === 'dig' && isCardinal(o.dir))
+  );
 }
 
 /** cost = base x 100 / speed, rounded up, minimum 1 tick. */
@@ -118,6 +139,8 @@ export const isDiagonal = (dir: Dir): boolean => dir.length === 2;
 export function actionCost(action: Action, speed = BASE_SPEED): number {
   if (action.kind === 'wait') return scaledCost(ActionCost.wait, speed);
   if (action.kind === 'rotate') return scaledCost(ActionCost.rotate, speed);
+  if (action.kind === 'burrow') return scaledCost(ActionCost.burrow, speed);
+  if (action.kind === 'dig') return DIG_TICKS;
   return scaledCost(isDiagonal(action.dir) ? ActionCost.moveDiagonal : ActionCost.moveCardinal, speed);
 }
 

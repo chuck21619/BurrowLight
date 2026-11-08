@@ -20,6 +20,9 @@ export interface Textures {
   sunbeam: Texture;
   /** index 0 = unlit, 1 = lit */
   torch: [Texture, Texture];
+  soil: Texture;
+  /** A tunnel opening, drawn over the floor. */
+  hole: Texture;
   /** index 0 = "/", 1 = "\" */
   mirror: [Texture, Texture];
 }
@@ -120,6 +123,30 @@ export function makeTextures(renderer: Renderer): Textures {
   };
   const mirror: [Texture, Texture] = [bake((g) => mirrorPane(g, false)), bake((g) => mirrorPane(g, true))];
 
+  // Soft soil: lumpy, lighter than the stone walls, so it reads as diggable.
+  const soil = bake((g) => {
+    px(g, 0, 0, 0x6b4a2e, SRC, SRC);
+    for (const [x, y, c] of [
+      [2, 3, 0x7d5a3a],
+      [9, 2, 0x5a3d25],
+      [5, 8, 0x7d5a3a],
+      [12, 7, 0x5a3d25],
+      [3, 12, 0x5a3d25],
+      [10, 12, 0x7d5a3a],
+      [7, 5, 0x8a6a48],
+      [13, 13, 0x8a6a48],
+    ] as const)
+      px(g, x, y, c, 2, 1);
+    px(g, 0, 0, 0x7d5a3a, SRC, 1);
+  });
+
+  const hole = bake((g) => {
+    g.ellipse(8, 9, 6, 4).fill(0x3a2a1c);
+    g.ellipse(8, 9, 4, 2.5).fill(0x120c08);
+    px(g, 2, 7, 0x8a6a48, 2, 1);
+    px(g, 12, 11, 0x8a6a48, 2, 1);
+  });
+
   // A little standing torch: a wooden post and a metal bowl, with a flame when lit (drawn over the floor).
   const torchBase = (g: Graphics) => {
     px(g, 7, 7, 0x6e4520, 2, 8); // post
@@ -200,5 +227,7 @@ export function makeTextures(renderer: Renderer): Textures {
     sunbeam,
     mirror,
     torch,
+    soil,
+    hole,
   };
 }

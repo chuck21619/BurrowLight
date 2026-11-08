@@ -39,6 +39,8 @@ const DIAGONAL_GRACE_MS = 40;
 const SHARE_SPREAD_PX = 20;
 /** In the dark, another critter shows (as an outline) only within this many tiles of you. */
 const SEE_FRIEND_IN_DARK = 2;
+/** Hold a direction into soft soil this long to start digging. */
+const PUSH_TO_DIG_MS = 350;
 /** Every critter's outline in the dark is the same dark purple, not its own color. */
 const DARK_OUTLINE = 0x7a5cb8;
 const LABEL_STACK_PX = 15;
@@ -59,6 +61,9 @@ interface Avatar {
   lit: boolean;
   oil: number;
   ko: number;
+  /** Ticks left digging (0 = not digging). */
+  dig: number;
+  digBar: Graphics;
   /** 0–100 */
   jitters: number;
   panic: boolean;
@@ -144,6 +149,11 @@ export class GameView {
   private beamGfx = new Graphics();
   private gloom: Gloom | null = null;
   private torches = new Map<number, boolean>();
+  /** Tunnel holes, by owner id: [endA, endB] and the two hole sprites. */
+  private tunnels = new Map<string, { a: number; b: number; sprites: Sprite[] }>();
+  /** When you started pushing into soft soil (to dig after a short hold). */
+  private pushSoilSince = 0;
+  private burrowRequested = false;
   private torchSprites = new Map<number, Sprite>();
   /** Ticks left in a boss intro (input is ignored and the camera watches the Gloom). */
   private intro = 0;
@@ -216,6 +226,7 @@ export class GameView {
     this.mirrors.clear();
     this.torchSprites.clear();
     this.torches.clear();
+    this.tunnels.clear();
     this.emitters = [];
     for (let k = 0; k < msg.emitters.length; k += 3) {
       const i = msg.emitters[k]!;
@@ -226,6 +237,7 @@ export class GameView {
     for (const t of msg.traps) this.addTrap(t);
     this.setMirrors(msg.mirrors);
     this.setTorches(msg.torches);
+    this.setTunnels(msg.tunnels);
     this.intro = msg.intro;
     this.markerLayer.addChild(this.beamGfx);
 
@@ -273,6 +285,7 @@ export class GameView {
     this.setOpen(msg.open);
     this.setMirrors(msg.mirrors);
     this.setTorches(msg.torches);
+    this.setTunnels(msg.tunnels);
     this.intro = msg.intro;
     this.setGloom(msg.gloom, false);
     this.applyPositions(msg.pos, msg.ack, false);
@@ -342,6 +355,32 @@ export class GameView {
         e.ellipse(ex, -6, 7, 9).fill(0xf3eefc);
         e.circle(ex + g.dx * 3, -6 + g.dy * 4, 3).fill(0x120c1c);
       }
+    }
+  }
+
+  /** Tunnel openings: a hole at each end, ringed in its owner's color. */
+  private setTunnels(list: [number, number, string][]): void {
+    const seen = new Set<string>();
+    for (const [a, b, owner] of list) {
+      seen.add(owner);
+      const cur = this.tunnels.get(owner);
+      if (cur && cur.a === a && cur.b === b) continue;
+      cur?.sprites.forEach((s) => s.destroy());
+      const color = this.avatars.get(owner)?.info.color ?? 0xffffff;
+      const sprites = [a, b].map((i) => {
+        const s = new Sprite(this.tex.hole);
+        s.position.set((i % this.w) * TILE, Math.floor(i / this.w) * TILE);
+        s.scale.set(SCALE);
+        s.tint = color;
+        this.markerLayer.addChildAt(s, 0);
+        return s;
+      });
+      this.tunnels.set(owner, { a, b, sprites });
+    }
+    for (const [owner, t] of this.tunnels) {
+      if (seen.has(owner)) continue;
+      t.sprites.forEach((s) => s.destroy());
+      this.tunnels.delete(owner);
     }
   }
 
@@ -419,6 +458,8 @@ export class GameView {
         return this.tex.heartstone;
       case Tile.Sunbeam:
         return this.tex.sunbeam;
+      case Tile.Soil:
+        return this.tex.soil;
       default:
         return this.tex.floor[hashSeed(x, y) % this.tex.floor.length]!;
     }
@@ -455,7 +496,7 @@ export class GameView {
 
   private applyPositions(pos: PlayerPos[], ack: number, snap: boolean): void {
     const seen = new Set<string>();
-    for (const [id, x, y, conn, lit, oil, ko, jitters, panic] of pos) {
+    for (const [id, x, y, conn, lit, oil, ko, jitters, panic, dig] of pos) {
       const a = this.avatars.get(id);
       if (!a) continue;
       seen.add(id);
@@ -466,6 +507,7 @@ export class GameView {
       a.ko = ko;
       a.stars.visible = ko > 0;
       a.jitters = jitters;
+      a.dig = dig;
       if (a.panic !== (panic === 1)) {
         a.panic = panic === 1;
         a.label.text = a.panic ? `${a.info.name} !!` : a.info.name;
@@ -530,6 +572,10 @@ export class GameView {
       if (!e.repeat) this.rotateRequested = true;
       return;
     }
+    if (e.code === 'KeyQ') {
+      if (!e.repeat) this.burrowRequested = true;
+      return;
+    }
     if (e.code === 'Period' || e.code === 'NumpadDecimal' || e.code === 'Numpad5') {
       this.waitRequested = true;
       return;
@@ -580,6 +626,9 @@ export class GameView {
     if (this.rotateRequested) {
       this.rotateRequested = false;
       action = { kind: 'rotate' };
+    } else if (this.burrowRequested) {
+      this.burrowRequested = false;
+      action = { kind: 'burrow' };
     } else if (this.waitRequested) {
       this.waitRequested = false;
       action = { kind: 'wait' };
@@ -591,7 +640,25 @@ export class GameView {
       if (held && !isDiagonal(held) && this.pending.length === 0 && now - this.lastKeyDown < DIAGONAL_GRACE_MS) return;
       this.tapped = null;
       const actual = resolveMove(this.moveTile, me.tx, me.ty, dir, alliesNeverBlock);
-      if (!actual) return;
+      if (!actual) {
+        // Pushing into soft soil for a moment starts digging a tunnel under it.
+        const [ddx, ddy] = DIRS[dir];
+        const intoSoil = !isDiagonal(dir) && this.knownTile(me.tx + ddx, me.ty + ddy) === Tile.Soil && held === dir;
+        if (!intoSoil) {
+          this.pushSoilSince = 0;
+          return;
+        }
+        if (!this.pushSoilSince) this.pushSoilSince = now;
+        if (now - this.pushSoilSince < PUSH_TO_DIG_MS) return;
+        this.pushSoilSince = 0;
+        action = { kind: 'dig', dir: dir as 'n' | 's' | 'e' | 'w' };
+        const seq = ++this.seq;
+        this.pending.push({ seq, action });
+        this.send({ t: 'intent', seq, action });
+        this.readyAt = now + actionCost(action) * this.tickMs;
+        return;
+      }
+      this.pushSoilSince = 0;
       me.tx += DIRS[actual][0];
       me.ty += DIRS[actual][1];
       // Send what was pressed; the server slides it the same way, using the same shared rule.
@@ -721,6 +788,8 @@ export class GameView {
     lamp.scale.set(2);
     lamp.position.set(TILE * 0.38, 4);
     lamp.visible = false;
+    const digBar = new Graphics();
+    digBar.position.set(0, -TILE * 0.5 - 22);
     const stars = new Container();
     for (let k = 0; k < 3; k++) {
       const st = new Sprite(this.tex.star);
@@ -741,7 +810,7 @@ export class GameView {
     });
     label.anchor.set(0.5, 1);
     label.position.set(0, -TILE * 0.5);
-    root.addChild(shadow, body, outline, lamp, stars, label);
+    root.addChild(shadow, body, outline, lamp, stars, digBar, label);
     this.entityLayer.addChild(root);
     this.avatars.set(info.id, {
       info,
@@ -754,6 +823,8 @@ export class GameView {
       lit: false,
       oil: 0,
       ko: 0,
+      dig: 0,
+      digBar,
       jitters: 0,
       panic: false,
       root,
@@ -811,6 +882,14 @@ export class GameView {
       a.outline.rotation = a.body.rotation;
       a.root.zIndex = a.dy;
       this.applyDarkness(a);
+      // Digging: a little progress bar above the critter, and a busy wiggle.
+      a.digBar.clear();
+      if (a.dig > 0 && a.root.visible) {
+        const f = 1 - a.dig / 30;
+        a.digBar.roundRect(-16, 0, 32, 5, 2).fill({ color: 0x0b0a10, alpha: 0.8 });
+        a.digBar.roundRect(-15, 1, 30 * f, 3, 1.5).fill(0xc9a07a);
+        a.body.rotation = Math.sin(now / 60) * 0.12;
+      }
       if (a.ko > 0) {
         // Stars circle the dazed critter's head.
         a.stars.children.forEach((st, k) => {

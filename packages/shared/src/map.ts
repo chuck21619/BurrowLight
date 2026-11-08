@@ -11,6 +11,8 @@ export const Tile = {
   Heartstone: 4,
   /** Walkable floor where a crack of sunlight shines one straight beam. */
   Sunbeam: 5,
+  /** Soft soil: blocks movement and light like a wall, but critters can tunnel under it. */
+  Soil: 6,
 } as const;
 export type TileType = (typeof Tile)[keyof typeof Tile];
 
@@ -51,8 +53,9 @@ export interface FloorMap {
 
 export const isWalkable = (t: number): boolean =>
   t === Tile.Floor || t === Tile.StairsDown || t === Tile.Sunshaft || t === Tile.Sunbeam;
-export const blocksSight = (t: number): boolean => t === Tile.Wall;
-export const beamCellOf = (t: number): BeamCell => (t === Tile.Wall ? 'wall' : t === Tile.Heartstone ? 'absorb' : 'open');
+export const blocksSight = (t: number): boolean => t === Tile.Wall || t === Tile.Soil;
+export const beamCellOf = (t: number): BeamCell =>
+  t === Tile.Wall || t === Tile.Soil ? 'wall' : t === Tile.Heartstone ? 'absorb' : 'open';
 
 export function tileAt(map: FloorMap, x: number, y: number): number {
   if (x < 0 || y < 0 || x >= map.w || y >= map.h) return Tile.Wall;
@@ -283,6 +286,8 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
     used.add(t.y * w + t.x);
   }
 
+  placeSoilShortcuts(rng, map);
+
   // Hidden traps: never near the entrance, next to a Heartstone, or on special tiles.
   for (let i = 0; i < tiles.length; i++) {
     if (tiles[i] !== Tile.Floor || used.has(i)) continue;
@@ -292,6 +297,52 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
     if (rng.chance(roomOf(p) ? TRAP_CHANCE_ROOM : TRAP_CHANCE_CORRIDOR)) map.traps.push(i);
   }
   return true;
+}
+
+/** Longest stretch of soil a tunnel can go under. */
+export const MAX_TUNNEL_SOIL = 3;
+/** A soil shortcut only counts if walking around would take at least this many steps. */
+const MIN_SHORTCUT_SAVING = 6;
+
+/**
+ * Turn a few thin wall segments into soft soil where a tunnel would be a real shortcut: floor on both
+ * sides, 1–3 tiles of wall between, and a long walk around. Soil never changes what's reachable.
+ */
+function placeSoilShortcuts(rng: Rng, map: FloorMap): void {
+  const { w, h, tiles } = map;
+  const candidates: number[][] = [];
+  for (let y = 1; y < h - 1; y++)
+    for (let x = 1; x < w - 1; x++) {
+      if (!isWalkable(tiles[y * w + x]!)) continue;
+      for (const [dx, dy] of [
+        [1, 0],
+        [0, 1],
+      ] as const) {
+        const wall: number[] = [];
+        let n = 1;
+        while (n <= MAX_TUNNEL_SOIL) {
+          const wx = x + dx * n;
+          const wy = y + dy * n;
+          if (wx <= 0 || wy <= 0 || wx >= w - 1 || wy >= h - 1 || tiles[wy * w + wx] !== Tile.Wall) break;
+          wall.push(wy * w + wx);
+          n++;
+        }
+        const bx = x + dx * n;
+        const by = y + dy * n;
+        if (!wall.length || bx >= w || by >= h || !isWalkable(tiles[by * w + bx]!)) continue;
+        const walk = distanceMap(tiles, w, h, { x, y })[by * w + bx]!;
+        if (walk >= MIN_SHORTCUT_SAVING) candidates.push(wall);
+      }
+    }
+  const taken = new Set<number>();
+  for (let k = rng.int(1, 3); k > 0 && candidates.length; k--) {
+    const wall = candidates.splice(rng.int(0, candidates.length - 1), 1)[0]!;
+    if (wall.some((i) => taken.has(i) || taken.has(i - 1) || taken.has(i + 1) || taken.has(i - w) || taken.has(i + w))) continue;
+    for (const i of wall) {
+      tiles[i] = Tile.Soil;
+      taken.add(i);
+    }
+  }
 }
 
 /** Matches TORCH_RADIUS in rules (kept here to avoid an import cycle). */

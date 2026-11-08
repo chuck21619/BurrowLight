@@ -15,6 +15,8 @@ import {
   computeLight,
   setLantern,
   MAX_OIL,
+  planTunnel,
+  DIG_TICKS,
   inIntro,
   gloomFootprint,
   GREAT_HEART_FULL,
@@ -822,5 +824,95 @@ describe('the Gloom loses interest', () => {
     step(game);
     step(game);
     expect(game.gloom!.target).not.toBe('a');
+  });
+});
+
+describe('burrowing', () => {
+  /** A floor with a soil shortcut, and a critter standing next to it. */
+  const withSoil = () => {
+    for (let seed = 1; seed < 200; seed++) {
+      const game = createGame(seed, [
+        { id: 'a', name: 'A', color: 1 },
+        { id: 'b', name: 'B', color: 2 },
+      ]);
+      const { map } = game;
+      for (let i = 0; i < map.tiles.length; i++) {
+        if (map.tiles[i] !== Tile.Soil) continue;
+        const x = i % map.w;
+        const y = Math.floor(i / map.w);
+        for (const [dir, dx, dy] of [
+          ['e', -1, 0],
+          ['w', 1, 0],
+          ['s', 0, -1],
+          ['n', 0, 1],
+        ] as const) {
+          const sx = x + dx;
+          const sy = y + dy;
+          if (!isWalkable(map.tiles[sy * map.w + sx] ?? Tile.Wall)) continue;
+          const plan = planTunnel(game, sx, sy, dir);
+          if (!plan) continue;
+          game.map.traps = [];
+          game.traps.clear();
+          const a = game.players.get('a')!;
+          a.x = sx;
+          a.y = sy;
+          return { game, a, dir, plan };
+        }
+      }
+    }
+    throw new Error('no soil found');
+  };
+
+  it('generators add soil shortcuts: soil blocks movement and light, and never changes what is reachable', () => {
+    let floors = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      const map = generateFloor(seed, 2, 1);
+      if (!map.tiles.includes(Tile.Soil)) continue;
+      floors++;
+      const dist = distanceMap(map.tiles, map.w, map.h, map.entrance);
+      for (let i = 0; i < map.tiles.length; i++) if (isWalkable(map.tiles[i]!)) expect(dist[i]).toBeGreaterThanOrEqual(0);
+    }
+    expect(floors).toBeGreaterThan(25); // about 60% of floor-2 maps; one-room floors have nothing to shortcut
+    expect(isWalkable(Tile.Soil)).toBe(false);
+    expect(beamCellOf(Tile.Soil)).toBe('wall');
+  });
+
+  it('digging takes 3 seconds standing still, then the tunnel takes its owner to the other side', () => {
+    const { game, a, dir, plan } = withSoil();
+    queueIntent(game, 'a', 1, { kind: 'dig', dir });
+    step(game);
+    expect(a.digging).not.toBeNull();
+    queueIntent(game, 'a', 2, { kind: 'wait' });
+    for (let i = 0; i < DIG_TICKS - 2; i++) step(game);
+    expect(game.tunnels.has('a')).toBe(false); // still digging; can't act
+    for (let i = 0; i < 3; i++) step(game);
+    expect(game.tunnels.get('a')).toEqual({ a: plan.a, b: plan.b });
+    for (let i = 0; i < 3; i++) step(game);
+    queueIntent(game, 'a', 3, { kind: 'burrow' });
+    step(game);
+    expect(a.y * game.map.w + a.x).toBe(plan.b);
+  });
+
+  it("one tunnel per critter: a new one replaces the old; and only the owner can use theirs", () => {
+    const { game, a, plan } = withSoil();
+    game.tunnels.set('a', { a: plan.a, b: plan.b });
+    const b = game.players.get('b')!;
+    b.x = a.x;
+    b.y = a.y;
+    queueIntent(game, 'b', 1, { kind: 'burrow' });
+    step(game);
+    expect(b.y * game.map.w + b.x).toBe(plan.a); // B can't use A's tunnel
+    // A digs again somewhere: the old tunnel is replaced, not added.
+    a.digging = { until: game.tick + 1, a: plan.b, b: plan.a };
+    step(game);
+    step(game);
+    expect(game.tunnels.size).toBe(1);
+    expect(game.tunnels.get('a')).toEqual({ a: plan.b, b: plan.a });
+  });
+
+  it("can't dig where there's no soil", () => {
+    const game = createGame(1, [{ id: 'a', name: 'A', color: 1 }]);
+    const a = game.players.get('a')!;
+    expect(planTunnel(game, a.x, a.y, 'n')).toBeNull();
   });
 });

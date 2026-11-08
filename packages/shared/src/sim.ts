@@ -1,6 +1,16 @@
 import { traceBeam, type MirrorOrient } from './beam';
 import { computeLight, type LightMap, type LightSource } from './light';
-import { beamCellOf, generateBossFloor, generateFloor, isWalkable, spawnPoints, tileAt, type FloorMap } from './map';
+import {
+  MAX_TUNNEL_SOIL,
+  Tile,
+  beamCellOf,
+  generateBossFloor,
+  generateFloor,
+  isWalkable,
+  spawnPoints,
+  tileAt,
+  type FloorMap,
+} from './map';
 import {
   BASE_SPEED,
   DIRS,
@@ -75,6 +85,14 @@ export interface PlayerState {
   panicDir: Dir | null;
   /** Tick the Gloom last touched this critter. */
   gloomTouchAt: number;
+  /** A tunnel being dug: it opens at `until` between tile indices `a` and `b`. */
+  digging: { until: number; a: number; b: number } | null;
+}
+
+/** A critter's tunnel under soft soil, between two floor tiles. Only its owner can use it. */
+export interface Tunnel {
+  a: number;
+  b: number;
 }
 
 /** The act 1 boss: a 2×2 cloud of darkness. (x, y) is its top-left tile. */
@@ -140,6 +158,8 @@ export interface GameState {
   introUntil: number;
   /** The torch the Gloom eats in its intro. */
   introTorch: number;
+  /** Each critter's one tunnel, by critter id. */
+  tunnels: Map<string, Tunnel>;
 }
 
 export interface NewPlayer {
@@ -173,6 +193,7 @@ export function createGame(seed: number, players: NewPlayer[], startFloor = 1): 
       panic: false,
       panicDir: null,
       gloomTouchAt: -Infinity,
+      digging: null,
     });
   });
   enterFloor(state, startFloor);
@@ -210,6 +231,8 @@ function enterFloor(state: GameState, n: number): void {
   state.exitOpen = false;
   state.mirrors = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
   state.torches = new Map(map.torches.map((t) => [t.y * map.w + t.x, t.lit]));
+  state.tunnels = new Map();
+  for (const p of state.players.values()) p.digging = null;
   state.introTorch = map.introTorch ? map.introTorch.y * map.w + map.introTorch.x : -1;
   state.introUntil = map.introTorch ? state.tick + BOSS_INTRO_MAX : 0;
   const order = [...state.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
@@ -265,6 +288,11 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   const tile = mapTile(state.map);
 
   for (const p of order) {
+    // A finished dig opens the tunnel (and closes this critter's old one: one tunnel each).
+    if (p.digging && state.tick >= p.digging.until) {
+      state.tunnels.set(p.id, { a: p.digging.a, b: p.digging.b });
+      p.digging = null;
+    }
     if (p.panic && state.tick >= p.readyAt) {
       p.queue.push({ seq: p.lastAck, action: { kind: 'move', dir: panicStep(state, p) } });
     }
@@ -282,6 +310,24 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       } else {
         cost = ActionCost.blockedMove;
       }
+    } else if (action.kind === 'dig') {
+      const plan = planTunnel(state, p.x, p.y, action.dir);
+      if (plan) {
+        p.digging = { until: state.tick + actionCost(action, p.speed), ...plan };
+        cost = actionCost(action, p.speed);
+      } else {
+        cost = ActionCost.blockedMove;
+      }
+    } else if (action.kind === 'burrow') {
+      // Pop out of the other end of your own tunnel.
+      const t = state.tunnels.get(p.id);
+      const here = p.y * state.map.w + p.x;
+      const to = t ? (here === t.a ? t.b : here === t.b ? t.a : -1) : -1;
+      if (to >= 0) {
+        p.x = to % state.map.w;
+        p.y = Math.floor(to / state.map.w);
+      }
+      cost = actionCost(action, p.speed);
     } else if (action.kind === 'rotate') {
       // Turn the mirror you're standing on.
       const here = p.y * state.map.w + p.x;
@@ -377,6 +423,7 @@ function updateJitters(state: GameState, order: PlayerState[]): void {
       p.panic = true;
       p.lit = false;
       p.panicDir = null;
+      p.digging = null; // too scared to keep digging
       clearQueue(p);
     } else if (p.panic && p.jitters === 0) {
       p.panic = false;
@@ -653,6 +700,27 @@ function reveal(state: GameState, i: number): void {
 }
 
 export const heartIndex = (state: GameState, h: { x: number; y: number }): number => h.y * state.map.w + h.x;
+
+/**
+ * Where a tunnel dug from (x, y) in `dir` would go: under 1–3 tiles of soft soil to the walkable tile
+ * on the other side. Null if there's no soil there, it's too thick, or there's nowhere to come out.
+ */
+export function planTunnel(state: GameState, x: number, y: number, dir: 'n' | 's' | 'e' | 'w'): { a: number; b: number } | null {
+  const [dx, dy] = DIRS[dir];
+  const { map } = state;
+  let n = 1;
+  while (n <= MAX_TUNNEL_SOIL && tileAt(map, x + dx * n, y + dy * n) === Tile.Soil) n++;
+  if (n === 1) return null; // no soil next to you
+  const ox = x + dx * n;
+  const oy = y + dy * n;
+  if (!isWalkable(tileAt(map, ox, oy))) return null;
+  return { a: y * map.w + x, b: oy * map.w + ox };
+}
+
+/** Tunnels as [endA, endB, ownerId] triples. */
+export function packTunnels(state: GameState): [number, number, string][] {
+  return [...state.tunnels].map(([id, t]) => [t.a, t.b, id]);
+}
 
 /** True during a boss introduction (nobody can act). */
 export const inIntro = (state: GameState): boolean => state.tick < state.introUntil;

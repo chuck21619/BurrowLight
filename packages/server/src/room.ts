@@ -16,6 +16,7 @@ import {
   packEmitters,
   packGloom,
   packTorches,
+  packTunnels,
   step,
   type Action,
   type GameState,
@@ -182,6 +183,7 @@ export class Room {
         gloom: packGloom(game),
         torches: packTorches(game),
         intro: Math.max(0, game.introUntil - game.tick),
+        tunnels: packTunnels(game),
       });
     }
   }
@@ -206,6 +208,7 @@ export class Room {
         Math.max(0, p.koUntil - game.tick),
         Math.round((p.jitters / JITTERS_MAX) * 100),
         p.panic ? 1 : 0,
+        p.digging ? Math.max(0, p.digging.until - game.tick) : 0,
       ]);
     }
     return out;
@@ -239,6 +242,7 @@ export class Room {
       gloom: packGloom(game),
       torches: packTorches(game),
       intro: Math.max(0, game.introUntil - game.tick),
+      tunnels: packTunnels(game),
     });
   }
 

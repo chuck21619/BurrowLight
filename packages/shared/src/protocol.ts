@@ -39,6 +39,8 @@ export type PlayerPos = [
   ko: number,
   jitters: number,
   panic: 0 | 1,
+  /** Ticks left digging a tunnel (0 = not digging). */
+  dig: number,
 ];
 
 export type ServerMessage =
@@ -78,6 +80,8 @@ export type ServerMessage =
       torches: number[];
       /** Ticks left in a boss introduction (nobody can act). */
       intro: number;
+      /** Every critter's tunnel: [endA, endB, ownerId]. */
+      tunnels: [number, number, string][];
     }
   | {
       t: 'tick';
@@ -97,6 +101,7 @@ export type ServerMessage =
       gloom: number[] | null;
       torches: number[];
       intro: number;
+      tunnels: [number, number, string][];
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z
