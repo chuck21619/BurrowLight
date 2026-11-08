@@ -3,7 +3,7 @@ import {
   ActionCost,
   BEAM_STRENGTH,
   DIRS,
-  HEART_FULL,
+  gloomFootprint,
   LANTERN_RADIUS,
   MAX_QUEUED_INTENTS,
   SUNSHAFT_RADIUS,
@@ -79,12 +79,29 @@ export interface Objective {
   charged: number;
   total: number;
   open: boolean;
+  /** On a boss floor: is the Gloom here, and is it pinned? */
+  gloom: boolean;
+  pinned: boolean;
 }
 
 interface Heart {
   idx: number;
   charge: number;
+  max: number;
   bar: Graphics;
+}
+
+interface Gloom {
+  x: number;
+  y: number;
+  pinned: boolean;
+  dx: number;
+  dy: number;
+  restless: number;
+  touching: boolean;
+  /** Drawn position (tiles), sliding toward (x, y). */
+  sx: number;
+  sy: number;
 }
 
 type Welcome = Extract<ServerMessage, { t: 'welcome' }>;
@@ -115,6 +132,10 @@ export class GameView {
   private mirrors = new Map<number, MirrorOrient>();
   private mirrorSprites = new Map<number, Sprite>();
   private beamGfx = new Graphics();
+  private gloom: Gloom | null = null;
+  private gloomView: Container | null = null;
+  private gloomEyes = new Graphics();
+  private tether = new Graphics();
 
   private avatars = new Map<string, Avatar>();
   private you = '';
@@ -192,11 +213,17 @@ export class GameView {
       const bar = new Graphics();
       bar.position.set((idx % this.w) * TILE, Math.floor(idx / this.w) * TILE);
       this.markerLayer.addChild(bar);
-      const heart = { idx, charge: msg.heartCharge[k] ?? 0, bar };
+      const heart = { idx, charge: msg.heartCharge[k] ?? 0, max: msg.heartMax[k] ?? 60, bar };
       this.drawHeartBar(heart);
       return heart;
     });
     this.setOpen(msg.open);
+    this.tether = new Graphics();
+    this.markerLayer.addChild(this.tether);
+    this.gloomView?.destroy({ children: true });
+    this.gloomView = null;
+    this.gloom = null;
+    this.setGloom(msg.gloom, true);
 
     for (const a of this.avatars.values()) a.root.destroy({ children: true });
     this.avatars.clear();
@@ -225,10 +252,75 @@ export class GameView {
     });
     this.setOpen(msg.open);
     this.setMirrors(msg.mirrors);
+    this.setGloom(msg.gloom, false);
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
     this.emitObjective();
     if (msg.runOver) this.onRunOver();
+  }
+
+  private setGloom(packed: number[] | null, snap: boolean): void {
+    if (!packed) {
+      if (this.gloomView) {
+        this.gloomView.destroy({ children: true });
+        this.gloomView = null;
+      }
+      this.gloom = null;
+      return;
+    }
+    const [x, y, pinned, dx, dy, restless, touching] = packed as [number, number, number, number, number, number, number];
+    const prev = this.gloom;
+    this.gloom = {
+      x,
+      y,
+      pinned: pinned === 1,
+      dx,
+      dy,
+      restless,
+      touching: touching === 1,
+      sx: snap || !prev ? x : prev.sx,
+      sy: snap || !prev ? y : prev.sy,
+    };
+    if (!this.gloomView) this.gloomView = this.makeGloomView();
+    if (!prev || prev.pinned !== this.gloom.pinned || prev.dx !== dx || prev.dy !== dy) this.drawGloomEyes();
+    this.lightDirty = true;
+  }
+
+  /** A soft cloud of grumpy darkness with two sleepy eyes. */
+  private makeGloomView(): Container {
+    const c = new Container();
+    const body = new Graphics();
+    body.circle(0, 0, 50).fill({ color: 0x3a2a52, alpha: 0.25 });
+    for (const [bx, by, r] of [
+      [0, 0, 40],
+      [-26, -16, 22],
+      [26, -16, 22],
+      [-22, 22, 24],
+      [22, 22, 24],
+      [0, -30, 22],
+    ] as const)
+      body.circle(bx, by, r).fill({ color: 0x241a33, alpha: 0.92 });
+    this.gloomEyes = new Graphics();
+    c.addChild(body, this.gloomEyes);
+    this.entityLayer.addChild(c);
+    return c;
+  }
+
+  private drawGloomEyes(): void {
+    const g = this.gloom;
+    if (!g) return;
+    const e = this.gloomEyes;
+    e.clear();
+    for (const side of [-1, 1]) {
+      const ex = side * 14;
+      if (g.pinned) {
+        // Squinting in the sunlight.
+        e.roundRect(ex - 8, -8, 16, 3, 1.5).fill(0xf3eefc);
+      } else {
+        e.ellipse(ex, -6, 7, 9).fill(0xf3eefc);
+        e.circle(ex + g.dx * 3, -6 + g.dy * 4, 3).fill(0x120c1c);
+      }
+    }
   }
 
   private setMirrors(flat: number[]): void {
@@ -310,7 +402,7 @@ export class GameView {
 
   /** A small charge bar above each Heartstone, always visible so the party knows where to go. */
   private drawHeartBar(heart: Heart): void {
-    const f = heart.charge / HEART_FULL;
+    const f = heart.charge / heart.max;
     const g = heart.bar;
     g.clear();
     g.roundRect(4, -12, TILE - 8, 8, 3).fill({ color: 0x0b0a10, alpha: 0.8 });
@@ -504,6 +596,7 @@ export class GameView {
     // Sunbeams, traced locally like the server does. Critters standing in a beam block it.
     const occupied = new Set<number>();
     for (const a of this.avatars.values()) occupied.add(a.ty * this.w + a.tx);
+    if (this.gloom) for (const i of gloomFootprint(this.w, this.gloom.x, this.gloom.y)) occupied.add(i);
     const beams = this.emitters
       .filter((e) => this.tiles[e.y * this.w + e.x] !== UNKNOWN)
       .map((e) =>
@@ -668,6 +761,8 @@ export class GameView {
       }
     }
 
+    this.drawGloom(now, dtMs);
+
     const me = this.avatars.get(this.you);
     if (me) {
       this.world.position.set(
@@ -676,6 +771,53 @@ export class GameView {
       );
     }
     this.onDebug(`tick ${this.serverTick} · pending ${this.pending.length} · ${Math.round(this.app.ticker.FPS)} fps`);
+  }
+
+  /** The Gloom slides between tiles and wobbles; while free, a smoky tether carries light away from the Great Heartstone. */
+  private drawGloom(now: number, dtMs: number): void {
+    const t = this.tether;
+    t.clear();
+    const g = this.gloom;
+    const view = this.gloomView;
+    if (!g || !view) return;
+    const k = Math.min(1, dtMs / 150);
+    g.sx += (g.x - g.sx) * k;
+    g.sy += (g.y - g.sy) * k;
+    const cx = (g.sx + 1) * TILE;
+    const cy = (g.sy + 1) * TILE;
+    const wobble = Math.sin(now / (g.restless ? 140 : 260));
+    view.position.set(Math.round(cx), Math.round(cy));
+    view.scale.set(1 + wobble * 0.04 + (g.pinned ? 0 : 0.04), 1 - wobble * 0.04);
+    view.zIndex = g.sy + 1;
+    view.alpha = g.pinned ? 0.85 : 1;
+
+    const heart = this.hearts[0];
+    if (!heart || g.pinned) return;
+    const hx = (heart.idx % this.w) * TILE + TILE / 2;
+    const hy = Math.floor(heart.idx / this.w) * TILE + TILE / 2;
+    const mx = (hx + cx) / 2;
+    const my = (hy + cy) / 2;
+    const len = Math.hypot(cx - hx, cy - hy) || 1;
+    const bend = Math.sin(now / 700) * Math.min(40, len / 4);
+    const qx = mx + (-(cy - hy) / len) * bend;
+    const qy = my + ((cx - hx) / len) * bend;
+    for (const [width, color, alpha] of [
+      [14, 0x2b2040, 0.45],
+      [5, 0x5a4880, 0.55],
+    ] as const) {
+      t.moveTo(hx, hy);
+      t.quadraticCurveTo(qx, qy, cx, cy);
+      t.stroke({ color, width, alpha, cap: 'round' });
+    }
+    // Wisps of light flowing from the stone into the Gloom.
+    const speed = g.touching ? 450 : 900;
+    for (let n = 0; n < 6; n++) {
+      const p = (now / speed + n / 6) % 1;
+      const u = 1 - p;
+      const px = u * u * hx + 2 * u * p * qx + p * p * cx;
+      const py = u * u * hy + 2 * u * p * qy + p * p * cy;
+      t.circle(px, py, 1.5 + 4 * u).fill({ color: 0xfff0b0, alpha: 0.85 * u + 0.1 });
+    }
   }
 
   private emitParty(): void {
@@ -695,9 +837,11 @@ export class GameView {
 
   private emitObjective(): void {
     this.onObjective({
-      charged: this.hearts.filter((h) => h.charge >= HEART_FULL).length,
+      charged: this.hearts.filter((h) => h.charge >= h.max).length,
       total: this.hearts.length,
       open: this.open,
+      gloom: this.gloom !== null,
+      pinned: this.gloom?.pinned ?? false,
     });
   }
 }

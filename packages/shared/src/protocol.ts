@@ -2,7 +2,8 @@ import type { Action } from './rules';
 
 // ---- Client -> server ----
 export type ClientMessage =
-  | { t: 'create'; name: string }
+  /** `startFloor` is honoured only by a development server, for testing later floors. */
+  | { t: 'create'; name: string; startFloor?: number }
   | { t: 'join'; code: string; name: string; token?: string }
   | { t: 'ready'; ready: boolean }
   | { t: 'start' }
@@ -69,6 +70,10 @@ export type ServerMessage =
       emitters: number[];
       /** Flat [index, orientation, ...] of every mirror (drawn once its tile is seen). */
       mirrors: number[];
+      /** Charge each Heartstone needs (a Great Heartstone needs more). */
+      heartMax: number[];
+      /** [x, y, pinned, dx, dy, restless, touching] or null. */
+      gloom: number[] | null;
     }
   | {
       t: 'tick';
@@ -85,6 +90,7 @@ export type ServerMessage =
       /** Everyone panicked at once: the run is over. */
       runOver: boolean;
       mirrors: number[];
+      gloom: number[] | null;
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

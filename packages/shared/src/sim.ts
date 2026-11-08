@@ -1,6 +1,6 @@
 import { traceBeam, type MirrorOrient } from './beam';
 import { computeLight, type LightMap, type LightSource } from './light';
-import { beamCellOf, generateFloor, spawnPoints, tileAt, type FloorMap } from './map';
+import { beamCellOf, generateBossFloor, generateFloor, isWalkable, spawnPoints, tileAt, type FloorMap } from './map';
 import {
   BASE_SPEED,
   DIRS,
@@ -15,6 +15,15 @@ import {
   START_OIL,
   SUNSHAFT_RADIUS,
   BEAM_STRENGTH,
+  GLOOM_DRAIN,
+  GLOOM_STEP,
+  GLOOM_STEP_LIT,
+  GLOOM_STEP_RESTLESS,
+  GLOOM_STEP_RESTLESS_LIT,
+  GLOOM_TOUCH_COOLDOWN,
+  GLOOM_WRIGGLE,
+  GREAT_HEART_FULL,
+  isBossFloor,
   JITTERS_CALM,
   JITTERS_DARK,
   JITTERS_DARK_WITH_FRIEND,
@@ -58,12 +67,33 @@ export interface PlayerState {
   panic: boolean;
   /** Direction a panicking critter last ran in, so it dashes rather than vibrates. */
   panicDir: Dir | null;
+  /** Tick the Gloom last touched this critter. */
+  gloomTouchAt: number;
+}
+
+/** The act 1 boss: a 2×2 cloud of darkness. (x, y) is its top-left tile. */
+export interface GloomState {
+  x: number;
+  y: number;
+  /** A sunbeam is passing through it: it can't move, and its tether to the Great Heartstone is cut. */
+  pinned: boolean;
+  nextStepAt: number;
+  nextWriggleAt: number;
+  /** Where it's heading next (its eyes look this way). */
+  dx: number;
+  dy: number;
+  /** 0, 1 or 2: speeds up as the Great Heartstone fills. */
+  restless: number;
+  /** Touching the Great Heartstone: draining it. */
+  touching: boolean;
 }
 
 export interface HeartState {
   x: number;
   y: number;
   charge: number;
+  /** Charge needed to be full (a Great Heartstone needs much more). */
+  max: number;
 }
 
 export interface GameState {
@@ -90,6 +120,8 @@ export interface GameState {
   descended: boolean;
   /** Everyone panicked at the same time. */
   runOver: boolean;
+  /** The boss, on boss floors until the Great Heartstone is full. */
+  gloom: GloomState | null;
 }
 
 export interface NewPlayer {
@@ -98,7 +130,7 @@ export interface NewPlayer {
   color: number;
 }
 
-export function createGame(seed: number, players: NewPlayer[]): GameState {
+export function createGame(seed: number, players: NewPlayer[], startFloor = 1): GameState {
   const state = {
     seed,
     floor: 0,
@@ -122,15 +154,18 @@ export function createGame(seed: number, players: NewPlayer[]): GameState {
       jitters: 0,
       panic: false,
       panicDir: null,
+      gloomTouchAt: -Infinity,
     });
   });
-  enterFloor(state, 1);
+  enterFloor(state, startFloor);
   return state;
 }
 
 /** Build floor `n` and put the party at its entrance. */
 function enterFloor(state: GameState, n: number): void {
-  const map = generateFloor(hashSeed(state.seed), n, heartsForParty(state.players.size));
+  const map = isBossFloor(n)
+    ? generateBossFloor(hashSeed(state.seed), n)
+    : generateFloor(hashSeed(state.seed), n, heartsForParty(state.players.size));
   state.floor = n;
   state.map = map;
   state.explored = new Uint8Array(map.w * map.h);
@@ -138,7 +173,10 @@ function enterFloor(state: GameState, n: number): void {
   state.traps = new Set(map.traps);
   state.revealedTraps = new Set();
   state.newlyRevealed = [];
-  state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0 }));
+  state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0, max: map.gloomStart ? GREAT_HEART_FULL : HEART_FULL }));
+  state.gloom = map.gloomStart
+    ? { ...map.gloomStart, pinned: false, nextStepAt: state.tick + 20, nextWriggleAt: 0, dx: 0, dy: 0, restless: 0, touching: false }
+    : null;
   state.exitOpen = false;
   state.mirrors = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
   const order = [...state.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
@@ -241,13 +279,25 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   }
 
   updateLight(state);
+  const gloomMoved = updateGloom(state);
+  // A snuffed lantern stops giving light this very tick.
+  if (gloomTouches(state, order) || gloomMoved) updateLight(state);
   updateJitters(state, order);
 
+  const g = state.gloom;
   for (const h of state.hearts) {
     const light = state.light.level[h.y * state.map.w + h.x]!;
-    h.charge = light > 0 ? Math.min(HEART_FULL, h.charge + light) : Math.max(0, h.charge - HEART_FADE);
+    if (g && !g.pinned) {
+      // The Gloom siphons off every bit of light poured in, and drains the stone while touching it.
+      if (g.touching) h.charge = Math.max(0, h.charge - GLOOM_DRAIN);
+    } else {
+      h.charge = light > 0 ? Math.min(h.max, h.charge + light) : Math.max(0, h.charge - HEART_FADE);
+    }
   }
-  if (!state.exitOpen && state.hearts.every((h) => h.charge >= HEART_FULL)) state.exitOpen = true;
+  if (!state.exitOpen && state.hearts.every((h) => h.charge >= h.max)) {
+    state.exitOpen = true;
+    state.gloom = null; // sun-soaked and content, it puffs away
+  }
 
   if (state.exitOpen) {
     const present = order.filter((p) => opts.isPresent?.(p.id) ?? true);
@@ -321,11 +371,123 @@ export function lightSources(state: GameState): LightSource[] {
   return out;
 }
 
-/** Trace every sunbeam; critters standing in a beam block it (and are lit by it). */
+/** The four tiles the Gloom covers. */
+export function gloomFootprint(w: number, x: number, y: number): number[] {
+  return [y * w + x, y * w + x + 1, (y + 1) * w + x, (y + 1) * w + x + 1];
+}
+
+const STEPS: [number, number][] = [
+  [0, 0],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/**
+ * The Gloom drifts toward the Great Heartstone, never into a sunbeam, and avoids other light
+ * (it moves at half speed when lantern light touches it). A sunbeam through it pins it; pinned,
+ * it wriggles one tile at a time, trying to get out of the light. Returns true if it moved.
+ */
+function updateGloom(state: GameState): boolean {
+  const g = state.gloom;
+  const heart = state.hearts[0];
+  if (!g || !heart) return false;
+  const { map } = state;
+  const w = map.w;
+  g.restless = heart.charge >= (heart.max * 2) / 3 ? 2 : heart.charge >= heart.max / 3 ? 1 : 0;
+  const beamSet = new Set(state.beams.flat());
+  const valid = (x: number, y: number) => gloomFootprint(w, x, y).every((i) => isWalkable(map.tiles[i]!));
+  const clear = (x: number, y: number) => gloomFootprint(w, x, y).every((i) => !beamSet.has(i));
+  const touchesHeart = (x: number, y: number) =>
+    gloomFootprint(w, x, y).some((i) => Math.max(Math.abs((i % w) - heart.x), Math.abs(Math.floor(i / w) - heart.y)) <= 1);
+
+  const wasPinned = g.pinned;
+  g.pinned = !clear(g.x, g.y);
+  g.touching = touchesHeart(g.x, g.y);
+  if (g.pinned) {
+    if (!wasPinned) g.nextWriggleAt = state.tick + GLOOM_WRIGGLE[g.restless]!;
+    if (state.tick < g.nextWriggleAt) return false;
+    g.nextWriggleAt = state.tick + GLOOM_WRIGGLE[g.restless]!;
+    const options = STEPS.slice(1).filter(([dx, dy]) => valid(g.x + dx, g.y + dy));
+    const free = options.filter(([dx, dy]) => clear(g.x + dx, g.y + dy));
+    const rng = createRng(hashSeed(state.seed, state.tick, 7));
+    const pick = free.length ? rng.pick(free) : options.length ? rng.pick(options) : null;
+    if (!pick) return false;
+    g.x += pick[0];
+    g.y += pick[1];
+    [g.dx, g.dy] = pick;
+    g.touching = touchesHeart(g.x, g.y);
+    return true;
+  }
+  if (state.tick < g.nextStepAt) return false;
+
+  // Distance (in Gloom steps) to a spot touching the Great Heartstone, never through a sunbeam.
+  const dist = new Map<number, number>();
+  const queue: [number, number][] = [];
+  for (let y = 1; y < map.h - 2; y++)
+    for (let x = 1; x < w - 2; x++)
+      if (valid(x, y) && clear(x, y) && touchesHeart(x, y)) {
+        dist.set(y * w + x, 0);
+        queue.push([x, y]);
+      }
+  for (let qi = 0; qi < queue.length; qi++) {
+    const [x, y] = queue[qi]!;
+    const d = dist.get(y * w + x)!;
+    for (const [dx, dy] of STEPS.slice(1)) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (dist.has(ny * w + nx) || !valid(nx, ny) || !clear(nx, ny)) continue;
+      dist.set(ny * w + nx, d + 1);
+      queue.push([nx, ny]);
+    }
+  }
+  const lightOn = (x: number, y: number) => gloomFootprint(w, x, y).reduce((s, i) => s + state.light.level[i]!, 0);
+  let best: [number, number] = [0, 0];
+  let bestScore = Infinity;
+  for (const [dx, dy] of STEPS) {
+    const nx = g.x + dx;
+    const ny = g.y + dy;
+    if (!valid(nx, ny) || !clear(nx, ny)) continue;
+    const score = (dist.get(ny * w + nx) ?? 999) * 10 + lightOn(nx, ny) * 3;
+    if (score < bestScore) {
+      bestScore = score;
+      best = [dx, dy];
+    }
+  }
+  const lit = lightOn(g.x, g.y) > 0;
+  const step = g.restless ? (lit ? GLOOM_STEP_RESTLESS_LIT : GLOOM_STEP_RESTLESS) : lit ? GLOOM_STEP_LIT : GLOOM_STEP;
+  g.nextStepAt = state.tick + step;
+  if (best[0] === 0 && best[1] === 0) return false;
+  g.x += best[0];
+  g.y += best[1];
+  [g.dx, g.dy] = best;
+  g.touching = touchesHeart(g.x, g.y);
+  return true;
+}
+
+/** Drifting through a critter snuffs its lantern and gives it a big burst of the Jitters. */
+function gloomTouches(state: GameState, order: PlayerState[]): boolean {
+  const g = state.gloom;
+  if (!g) return false;
+  let snuffed = false;
+  const foot = new Set(gloomFootprint(state.map.w, g.x, g.y));
+  for (const p of order) {
+    if (!foot.has(p.y * state.map.w + p.x) || state.tick - p.gloomTouchAt < GLOOM_TOUCH_COOLDOWN) continue;
+    p.gloomTouchAt = state.tick;
+    snuffed ||= p.lit;
+    p.lit = false;
+    p.jitters = Math.min(JITTERS_MAX, p.jitters + JITTERS_MAX / 2);
+  }
+  return snuffed;
+}
+
+/** Trace every sunbeam; critters standing in a beam block it (and are lit by it), and so does the Gloom. */
 export function traceBeams(state: GameState): number[][] {
   const { map } = state;
   const occupied = new Set<number>();
   for (const p of state.players.values()) occupied.add(p.y * map.w + p.x);
+  if (state.gloom) for (const i of gloomFootprint(map.w, state.gloom.x, state.gloom.y)) occupied.add(i);
   return map.emitters.map((e) =>
     traceBeam(
       map.w,
@@ -361,6 +523,12 @@ function reveal(state: GameState, i: number): void {
 }
 
 export const heartIndex = (state: GameState, h: { x: number; y: number }): number => h.y * state.map.w + h.x;
+
+/** The Gloom for the wire: [x, y, pinned, dx, dy, restless, touching], or null. */
+export function packGloom(state: GameState): number[] | null {
+  const g = state.gloom;
+  return g ? [g.x, g.y, g.pinned ? 1 : 0, g.dx, g.dy, g.restless, g.touching ? 1 : 0] : null;
+}
 
 /** Mirrors as a flat [index, orientation, ...] list. */
 export function packMirrors(state: GameState): number[] {

@@ -41,6 +41,8 @@ export interface FloorMap {
   emitters: Emitter[];
   /** Rotatable mirrors on floor tiles, with their starting (scrambled) orientation. */
   mirrors: { x: number; y: number; orient: MirrorOrient }[];
+  /** Boss rooms: where the Gloom (2×2, top-left corner) starts; its one Heartstone is a Great Heartstone. */
+  gloomStart?: Point;
 }
 
 export const isWalkable = (t: number): boolean =>
@@ -380,6 +382,115 @@ function scrambleUntilUnsolved(rng: Rng, map: FloorMap): boolean {
     for (const m of map.mirrors) m.orient = rng.int(0, 1) as MirrorOrient;
   }
   return false;
+}
+
+/**
+ * A boss room: one big room with a few pillars, the party's sunshaft on the left, a Great
+ * Heartstone toward the right, sunbeams shining in from the walls with mirrors along them, and
+ * the Gloom waiting far from both. The ladder opens when the Great Heartstone is full.
+ */
+export function generateBossFloor(seed: number, floor: number): FloorMap {
+  const rng = createRng(hashSeed(seed, floor, 0xb055));
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const map = tryBossRoom(rng);
+    if (map) return map;
+  }
+  throw new Error(`could not generate boss floor for seed ${seed}`);
+}
+
+function tryBossRoom(rng: Rng): FloorMap | null {
+  const w = rng.int(20, 24);
+  const h = rng.int(13, 15);
+  const tiles = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) tiles[y * w + x] = Tile.Floor;
+  const at = (x: number, y: number) => tiles[y * w + x]!;
+  const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+
+  const entrance = { x: 2, y: Math.floor(h / 2) };
+  const heart = { x: w - rng.int(6, 8), y: rng.int(4, h - 5) };
+  const stairs = { x: w - 2, y: rng.chance(0.5) ? 1 : h - 2 };
+
+  // A few pillars to herd around, away from the start and the Great Heartstone.
+  for (let k = rng.int(3, 5); k > 0; k--) {
+    const px = rng.int(5, w - 4);
+    const py = rng.int(2, h - 3);
+    const [pw, ph] = rng.chance(0.5) ? [2, 1] : [1, 2];
+    if (cheb({ x: px, y: py }, heart) <= 2 || cheb({ x: px, y: py }, stairs) <= 1) continue;
+    for (let y = py; y < py + ph; y++) for (let x = px; x < px + pw; x++) tiles[y * w + x] = Tile.Wall;
+  }
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(heart.x + dx, heart.y + dy) !== Tile.Floor) return null;
+  tiles[entrance.y * w + entrance.x] = Tile.Sunshaft;
+  tiles[heart.y * w + heart.x] = Tile.Heartstone;
+  tiles[stairs.y * w + stairs.x] = Tile.StairsDown;
+
+  // Sunbeams shine in from three walls; mirrors sit along their paths so the party can swing them.
+  const emitters: Emitter[] = [];
+  const mirrors: { x: number; y: number; orient: MirrorOrient }[] = [];
+  const reserved = new Set([entrance, heart, stairs].map((p) => p.y * w + p.x));
+  const spots: [Point, number, number][] = [
+    [{ x: rng.int(6, w - 3), y: 1 }, 0, 1],
+    [{ x: rng.int(6, w - 3), y: h - 2 }, 0, -1],
+    [{ x: w - 2, y: rng.int(2, h - 3) }, -1, 0],
+  ];
+  for (const [p, dx, dy] of spots) {
+    if (reserved.has(p.y * w + p.x) || at(p.x, p.y) !== Tile.Floor) continue;
+    tiles[p.y * w + p.x] = Tile.Sunbeam;
+    reserved.add(p.y * w + p.x);
+    emitters.push({ ...p, dx, dy });
+    // Walk the straight beam and drop 1–2 mirrors on it.
+    const line: Point[] = [];
+    for (let s = 2; ; s++) {
+      const q = { x: p.x + dx * s, y: p.y + dy * s };
+      if (at(q.x, q.y) !== Tile.Floor) break;
+      if (!reserved.has(q.y * w + q.x)) line.push(q);
+    }
+    if (!line.length) continue;
+    for (const m of rng.chance(0.5) ? [rng.pick(line)] : [rng.pick(line), rng.pick(line)]) {
+      if (reserved.has(m.y * w + m.x)) continue;
+      mirrors.push({ ...m, orient: rng.int(0, 1) as MirrorOrient });
+      reserved.add(m.y * w + m.x);
+    }
+  }
+  if (emitters.length < 2) return null;
+  for (let k = 0; k < 2; k++) {
+    const m = { x: rng.int(4, w - 3), y: rng.int(2, h - 3) };
+    if (at(m.x, m.y) === Tile.Floor && !reserved.has(m.y * w + m.x)) {
+      mirrors.push({ ...m, orient: rng.int(0, 1) as MirrorOrient });
+      reserved.add(m.y * w + m.x);
+    }
+  }
+
+  // Everything reachable.
+  const d = distanceMap(tiles, w, h, entrance);
+  for (let i = 0; i < tiles.length; i++) if (isWalkable(tiles[i]!) && d[i]! < 0) return null;
+
+  // The Gloom starts far from the Great Heartstone and the party, outside any starting beam.
+  const mset = new Map(mirrors.map((m) => [m.y * w + m.x, m.orient]));
+  const cell = (x: number, y: number) => beamCellOf(tiles[y * w + x]!);
+  const lit = new Set(emitters.flatMap((e) => traceBeam(w, h, cell, e, (i) => mset.get(i), () => false)));
+  const starts: Point[] = [];
+  for (let y = 1; y < h - 2; y++)
+    for (let x = 5; x < w - 2; x++) {
+      const foot = [y * w + x, y * w + x + 1, (y + 1) * w + x, (y + 1) * w + x + 1];
+      if (foot.every((i) => tiles[i] === Tile.Floor && !lit.has(i) && !reserved.has(i)) && cheb({ x, y }, heart) >= 7)
+        starts.push({ x, y });
+    }
+  if (!starts.length) return null;
+
+  return {
+    w,
+    h,
+    tiles,
+    rooms: [{ x: 1, y: 1, w: w - 2, h: h - 2 }],
+    entrance,
+    stairs,
+    sunshafts: [entrance],
+    hearts: [heart],
+    traps: [],
+    emitters,
+    mirrors,
+    gloomStart: rng.pick(starts),
+  };
 }
 
 /** Breadth-first path distance from `from` over walkable tiles; -1 = unreachable. */

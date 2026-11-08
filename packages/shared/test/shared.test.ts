@@ -15,6 +15,10 @@ import {
   computeLight,
   setLantern,
   MAX_OIL,
+  gloomFootprint,
+  GREAT_HEART_FULL,
+  GLOOM_DRAIN,
+  GLOOM_WRIGGLE,
   traceBeam,
   beamCellOf,
   JITTERS_MAX,
@@ -494,5 +498,138 @@ describe('sunbeams and mirrors', () => {
       return;
     }
     throw new Error('no one-turn puzzle found');
+  });
+});
+
+describe('the Gloom', () => {
+  const bossGame = (seed = 3) =>
+    createGame(seed, [
+      { id: 'a', name: 'A', color: 1 },
+      { id: 'b', name: 'B', color: 2 },
+    ], 3);
+  const foot = (game: ReturnType<typeof bossGame>) => gloomFootprint(game.map.w, game.gloom!.x, game.gloom!.y);
+  const run = (game: ReturnType<typeof bossGame>, ticks: number) => {
+    for (let i = 0; i < ticks; i++) step(game);
+  };
+  // Park both critters at the entrance, lanterns off, out of everyone's way.
+  const park = (game: ReturnType<typeof bossGame>) => {
+    for (const p of game.players.values()) {
+      p.x = game.map.entrance.x;
+      p.y = game.map.entrance.y;
+      p.lit = false;
+      p.jitters = 0;
+    }
+  };
+
+  it('boss floors (3, 6, 9) have one Great Heartstone, sunbeams, mirrors and a Gloom that starts free', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const game = bossGame(seed);
+      expect(game.hearts.length).toBe(1);
+      expect(game.hearts[0]!.max).toBe(GREAT_HEART_FULL);
+      expect(game.map.emitters.length).toBeGreaterThanOrEqual(2);
+      expect(game.gloom).not.toBeNull();
+      expect(game.gloom!.pinned).toBe(false);
+    }
+    expect(createGame(1, [{ id: 'a', name: 'A', color: 1 }], 2).gloom).toBeNull();
+  });
+
+  it('never steps into a sunbeam, and creeps toward the Great Heartstone', () => {
+    const game = bossGame();
+    park(game);
+    const heart = game.hearts[0]!;
+    const distance = () => Math.max(Math.abs(game.gloom!.x - heart.x), Math.abs(game.gloom!.y - heart.y));
+    const start = distance();
+    for (let i = 0; i < 200 && game.gloom; i++) {
+      step(game);
+      park(game);
+      if (!game.gloom!.pinned) {
+        const beams = new Set(game.beams.flat());
+        expect(foot(game).some((t) => beams.has(t))).toBe(false);
+      }
+    }
+    if (game.gloom && !game.gloom.pinned) expect(distance()).toBeLessThanOrEqual(start);
+  });
+
+  it('while free it siphons the light: lanterns on the Great Heartstone add nothing, and touching drains it', () => {
+    const game = bossGame();
+    const heart = game.hearts[0]!;
+    const [a, b] = [game.players.get('a')!, game.players.get('b')!];
+    a.x = heart.x - 1; a.y = heart.y;
+    b.x = heart.x + 1; b.y = heart.y;
+    setLantern(game, 'a', true);
+    setLantern(game, 'b', true);
+    heart.charge = 100;
+    game.gloom!.pinned = false;
+    step(game);
+    if (!game.gloom!.pinned) expect(heart.charge).toBeLessThanOrEqual(100);
+    // Put it right on the stone: it drains.
+    game.gloom!.x = heart.x - 2;
+    game.gloom!.y = heart.y - 1;
+    game.mirrors.clear();
+    game.map.emitters = [];
+    const before = heart.charge;
+    step(game);
+    expect(game.gloom!.touching).toBe(true);
+    expect(heart.charge).toBe(before - GLOOM_DRAIN);
+  });
+
+  it('a sunbeam through it pins it, cuts the tether so light charges the stone, and it wriggles free a tile at a time', () => {
+    const game = bossGame();
+    park(game);
+    const g = game.gloom!;
+    const heart = game.hearts[0]!;
+    // Aim a fake beam straight through the Gloom's row from the left wall.
+    game.map.emitters = [{ x: 1, y: g.y, dx: 1, dy: 0 }];
+    game.mirrors.clear();
+    // Clear any pillar between the wall and the Gloom so the beam reaches it.
+    for (let x = 1; x < g.x; x++) game.map.tiles[g.y * game.map.w + x] = Tile.Floor;
+    const [a, b] = [game.players.get('a')!, game.players.get('b')!];
+    a.x = heart.x - 1; a.y = heart.y;
+    b.x = heart.x + 1; b.y = heart.y;
+    setLantern(game, 'a', true);
+    setLantern(game, 'b', true);
+    step(game);
+    expect(game.gloom!.pinned).toBe(true);
+    const at = [game.gloom!.x, game.gloom!.y];
+    const charge = heart.charge;
+    step(game);
+    expect(heart.charge).toBeGreaterThan(charge);
+    run(game, GLOOM_WRIGGLE[0] + 2);
+    expect([game.gloom!.x, game.gloom!.y]).not.toEqual(at);
+  });
+
+  it('drifting through a critter snuffs its lantern and adds half a Jitters meter', () => {
+    const game = bossGame();
+    const a = game.players.get('a')!;
+    const g = game.gloom!;
+    a.x = g.x;
+    a.y = g.y;
+    setLantern(game, 'a', true);
+    a.jitters = 0;
+    game.map.sunshafts = [];
+    game.map.emitters = [];
+    step(game);
+    expect(a.lit).toBe(false);
+    expect(a.jitters).toBeGreaterThanOrEqual(JITTERS_MAX / 2);
+  });
+
+  it('a full Great Heartstone opens the hatch and the Gloom puffs away', () => {
+    const game = bossGame();
+    park(game);
+    game.hearts[0]!.charge = GREAT_HEART_FULL - 1;
+    game.gloom!.pinned = true;
+    // Pin it for real with a beam on its row, and light the stone.
+    const g = game.gloom!;
+    game.map.emitters = [{ x: 1, y: g.y, dx: 1, dy: 0 }];
+    game.mirrors.clear();
+    for (let x = 1; x < g.x; x++) game.map.tiles[g.y * game.map.w + x] = Tile.Floor;
+    const heart = game.hearts[0]!;
+    const a = game.players.get('a')!;
+    a.x = heart.x - 1;
+    a.y = heart.y;
+    setLantern(game, 'a', true);
+    run(game, 3);
+    expect(game.exitOpen).toBe(true);
+    expect(game.gloom).toBeNull();
   });
 });

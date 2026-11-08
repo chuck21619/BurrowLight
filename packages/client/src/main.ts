@@ -88,7 +88,9 @@ async function ensureConnected(): Promise<boolean> {
 
 $('create').addEventListener('click', async () => {
   setError('');
-  if (await ensureConnected()) net.send({ t: 'create', name: playerName() });
+  // Dev only: ?floor=3 starts the run on floor 3 (a boss floor) for testing.
+  const devFloor = import.meta.env.DEV ? Number(new URLSearchParams(location.search).get('floor')) || 1 : 1;
+  if (await ensureConnected()) net.send({ t: 'create', name: playerName(), startFloor: devFloor });
 });
 
 async function join(code: string) {
@@ -213,10 +215,14 @@ $('again').addEventListener('click', () => {
 });
 
 let floorText = '';
-game.onObjective = ({ charged, total, open }) => {
+game.onObjective = ({ charged, total, open, gloom, pinned }) => {
   const goal = open
     ? 'The hatch is open! Everyone gather on the ladder.'
-    : `Light the Heartstone${total > 1 ? 's' : ''} (${charged}/${total}): more light charges it faster`;
+    : gloom
+      ? pinned
+        ? 'The Gloom is pinned! Pour light into the Great Heartstone'
+        : "The Gloom is stealing the Great Heartstone's light. Pin it in a sunbeam!"
+      : `Light the Heartstone${total > 1 ? 's' : ''} (${charged}/${total}): more light charges it faster`;
   $('banner').replaceChildren(document.createTextNode(floorText), document.createElement('br'), Object.assign(document.createElement('small'), { textContent: goal }));
 };
 const debugEl = $('debug');

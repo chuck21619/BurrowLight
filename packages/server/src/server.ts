@@ -62,7 +62,8 @@ export function startServer(port: number): Promise<RunningServer> {
         case 'create': {
           if (room) return;
           const code = makeRoomCode((c) => rooms.has(c));
-          const r = new Room(code);
+          const devFloor = process.env.NODE_ENV !== 'production' && Number.isInteger(msg.startFloor) ? msg.startFloor! : 1;
+          const r = new Room(code, Math.min(9, Math.max(1, devFloor)));
           rooms.set(code, r);
           const m = r.addMember(peer, sanitizeName(msg.name));
           if (typeof m === 'string') return fail(m);

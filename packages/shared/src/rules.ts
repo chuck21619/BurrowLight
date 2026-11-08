@@ -41,6 +41,25 @@ export const KO_TICKS = 100;
  */
 export const HEART_FULL = 60;
 export const HEART_FADE = 1;
+// ---- The Gloom (act 1 boss) ----
+/** Floors 3, 6 and 9 end in a boss room. */
+export const isBossFloor = (floor: number): boolean => floor % 3 === 0;
+/** The Gloom moves one tile every this many ticks: slower than a walking critter (2). */
+export const GLOOM_STEP = 3;
+/** ...and half as fast when lantern light touches it. */
+export const GLOOM_STEP_LIT = 6;
+/** Restless (after a third of the Great Heartstone is charged) it speeds up. */
+export const GLOOM_STEP_RESTLESS = 2;
+export const GLOOM_STEP_RESTLESS_LIT = 4;
+/** While pinned in a sunbeam it wriggles one tile every this many ticks: 4 s, then 3 s, then 2 s. */
+export const GLOOM_WRIGGLE = [40, 30, 20] as const;
+/** Charge drained per tick while the Gloom touches the Great Heartstone. */
+export const GLOOM_DRAIN = 3;
+/** A critter it touches can't be touched again for this long. */
+export const GLOOM_TOUCH_COOLDOWN = 20;
+/** The Great Heartstone needs four times a normal one: 12 s of two lanterns while the Gloom is pinned. */
+export const GREAT_HEART_FULL = 240;
+
 /** About one Heartstone per two players. */
 export const heartsForParty = (players: number): number => Math.max(1, Math.ceil(players / 2));
 /** Real actions a player may have waiting on the server at once. */

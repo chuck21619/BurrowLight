@@ -14,6 +14,7 @@ import {
   heartIndex,
   packMirrors,
   packEmitters,
+  packGloom,
   step,
   type Action,
   type GameState,
@@ -50,7 +51,11 @@ export class Room {
   emptySince: number | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(readonly code: string) {}
+  /** `startFloor` > 1 is for testing on a development server only. */
+  constructor(
+    readonly code: string,
+    private readonly startFloor = 1,
+  ) {}
 
   get connectedCount(): number {
     let n = 0;
@@ -123,6 +128,7 @@ export class Room {
     this.game = createGame(
       seed,
       [...this.members.values()].map((m) => ({ id: m.id, name: m.name, color: m.color })),
+      this.startFloor,
     );
     for (const m of this.members.values()) this.sendWelcome(m);
     this.timer = setInterval(() => this.tick(), TICK_MS);
@@ -172,6 +178,7 @@ export class Room {
         open: game.exitOpen,
         runOver: game.runOver,
         mirrors,
+        gloom: packGloom(game),
       });
     }
   }
@@ -225,6 +232,8 @@ export class Room {
       runOver: game.runOver,
       emitters: packEmitters(game),
       mirrors: packMirrors(game),
+      heartMax: game.hearts.map((h) => h.max),
+      gloom: packGloom(game),
     });
   }
 
