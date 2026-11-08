@@ -44,11 +44,19 @@
         <ul id="party"></ul>
         <div id="banner"></div>
         <div id="help">
-          <kbd>Space</kbd> lantern on/off (burns oil) &middot; WASD or arrows to move &middot; <kbd>.</kbd> to wait
+          <kbd>Space</kbd> lantern on/off (burns oil) &middot; WASD or arrows to move &middot; stay in the light or near a friend to keep calm
         </div>
         <div id="debug"></div>
       </div>
     </main>
+
+    <div id="runover" class="panel-screen" hidden>
+      <div class="panel">
+        <h1>Eek!</h1>
+        <p class="subtitle">Everyone got the jitters at once. The run is over.</p>
+        <button id="again" class="primary">Back to the burrow</button>
+      </div>
+    </div>
 
     <div id="status" hidden></div>
     <script type="module" src="/src/main.ts"></script>

@@ -49,6 +49,9 @@ interface Avatar {
   lit: boolean;
   oil: number;
   ko: number;
+  /** 0–100 */
+  jitters: number;
+  panic: boolean;
   root: Container;
   body: Sprite;
   label: Text;
@@ -63,6 +66,8 @@ export interface PartyMember {
   lit: boolean;
   oil: number;
   ko: number;
+  jitters: number;
+  panic: boolean;
 }
 
 export interface Objective {
@@ -124,6 +129,7 @@ export class GameView {
 
   onPartyChange: (players: PartyMember[]) => void = () => {};
   onObjective: (o: Objective) => void = () => {};
+  onRunOver: () => void = () => {};
   onDebug: (text: string) => void = () => {};
 
   constructor(private send: (msg: ClientMessage) => void) {}
@@ -183,6 +189,7 @@ export class GameView {
     this.applyPositions(msg.pos, msg.ack, true);
     this.lightDirty = true;
     this.emitObjective();
+    if (msg.runOver) this.onRunOver();
   }
 
   applyTick(msg: Tick): void {
@@ -200,6 +207,7 @@ export class GameView {
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
     this.emitObjective();
+    if (msg.runOver) this.onRunOver();
   }
 
   private addTiles(flat: number[]): void {
@@ -268,7 +276,7 @@ export class GameView {
 
   private applyPositions(pos: PlayerPos[], ack: number, snap: boolean): void {
     const seen = new Set<string>();
-    for (const [id, x, y, conn, lit, oil, ko] of pos) {
+    for (const [id, x, y, conn, lit, oil, ko, jitters, panic] of pos) {
       const a = this.avatars.get(id);
       if (!a) continue;
       seen.add(id);
@@ -278,11 +286,16 @@ export class GameView {
       a.oil = oil;
       a.ko = ko;
       a.stars.visible = ko > 0;
+      a.jitters = jitters;
+      if (a.panic !== (panic === 1)) {
+        a.panic = panic === 1;
+        a.label.text = a.panic ? `${a.info.name} !!` : a.info.name;
+      }
       if (id === this.you) {
         this.serverX = x;
         this.serverY = y;
         if (snap || performance.now() - this.litToggledAt > LANTERN_PREDICT_MS) this.myLit = a.lit;
-        if (oil <= 0) this.myLit = false;
+        if (oil <= 0 || a.panic) this.myLit = false;
       } else {
         a.tx = x;
         a.ty = y;
@@ -307,7 +320,7 @@ export class GameView {
     const me = this.avatars.get(this.you);
     if (!me) return;
     this.pending = this.pending.filter((p) => p.seq > ack);
-    if (me.ko > 0) this.pending = []; // the server dropped them when the trap snapped
+    if (me.ko > 0 || me.panic) this.pending = []; // the server dropped them
     let x = this.serverX;
     let y = this.serverY;
     for (const { action } of this.pending) {
@@ -350,6 +363,7 @@ export class GameView {
   private toggleLantern(): void {
     const me = this.avatars.get(this.you);
     if (!me) return;
+    if (me.panic) return;
     const on = !this.myLit;
     if (on && me.oil <= 0) return;
     this.myLit = on;
@@ -376,7 +390,7 @@ export class GameView {
 
   private handleInput(now: number): void {
     const me = this.avatars.get(this.you);
-    if (!me || me.ko > 0 || now < this.readyAt || this.pending.length >= MAX_QUEUED_INTENTS) return;
+    if (!me || me.ko > 0 || me.panic || now < this.readyAt || this.pending.length >= MAX_QUEUED_INTENTS) return;
 
     let action: Action | null = null;
     let costOf: Action | null = null;
@@ -498,6 +512,8 @@ export class GameView {
       lit: false,
       oil: 0,
       ko: 0,
+      jitters: 0,
+      panic: false,
       root,
       body,
       label,
@@ -541,7 +557,10 @@ export class GameView {
       }
       const left = Math.hypot(a.tx - a.dx, a.ty - a.dy);
       const hop = Math.sin(Math.min(left, 1) * Math.PI);
-      a.root.position.set(Math.round(a.dx * TILE + TILE / 2 + a.ox), Math.round(a.dy * TILE + TILE / 2 - hop * 6));
+      // The Jitters: critters start trembling past half a meter, and shake hard when they panic.
+      const tremble = a.panic ? 3 : a.jitters > 50 ? ((a.jitters - 50) / 50) * 1.5 : 0;
+      const shake = tremble ? Math.sin(now / 25 + a.info.color) * tremble : 0;
+      a.root.position.set(Math.round(a.dx * TILE + TILE / 2 + a.ox + shake), Math.round(a.dy * TILE + TILE / 2 - hop * 6));
       a.body.scale.set(SCALE * (1 + hop * 0.06), SCALE * (1 - hop * 0.06));
       a.body.rotation = a.ko > 0 ? 0.25 * Math.sin(now / 150) : 0;
       a.root.zIndex = a.dy;
@@ -573,6 +592,8 @@ export class GameView {
         lit: a.info.id === this.you ? this.myLit : a.lit,
         oil: a.oil,
         ko: a.ko,
+        jitters: a.jitters,
+        panic: a.panic,
       })),
     );
   }

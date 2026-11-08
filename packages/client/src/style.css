@@ -253,6 +253,30 @@ button.primary {
   background: #b08a4c;
 }
 
+.jitters {
+  height: 4px;
+  border-radius: 3px;
+  background: #1a1524;
+  overflow: hidden;
+}
+
+.jitters-fill {
+  height: 100%;
+  background: #9b7fd1;
+}
+
+.jitters-fill.panic {
+  background: #e07ad8;
+  box-shadow: 0 0 6px #e07ad8;
+}
+
+#runover {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 10, 16, 0.75);
+  z-index: 20;
+}
+
 .oil-fill.burning {
   background: #ffb347;
   box-shadow: 0 0 6px #ffb347;
@@ -290,7 +314,7 @@ button.primary {
 #debug {
   position: absolute;
   right: 12px;
-  bottom: 12px;
+  top: 12px;
   color: var(--muted);
   font-family: ui-monospace, monospace;
   font-size: 12px;

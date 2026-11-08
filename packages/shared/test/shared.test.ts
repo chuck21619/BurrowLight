@@ -14,8 +14,11 @@ import {
   DIRS,
   computeLight,
   setLantern,
-  MIN_STAIRS_DISTANCE,
   MAX_OIL,
+  JITTERS_MAX,
+  JITTERS_DARK,
+  JITTERS_DARK_WITH_FRIEND,
+  JITTERS_CALM,
   KO_TICKS,
   HEART_CHARGE_TICKS,
   OIL_PER_FLOOR,
@@ -39,15 +42,15 @@ describe('map generation', () => {
     expect(generateFloor(1234, 2).tiles).not.toEqual(generateFloor(1234, 1).tiles);
   });
 
-  it('makes every walkable tile reachable and puts the stairs far away, across many seeds', () => {
+  it('makes every walkable tile reachable and puts the stairs away from the start, across many seeds', () => {
     for (let seed = 1; seed <= 200; seed++) {
-      const map = generateFloor(seed);
+      const map = generateFloor(seed, (seed % 6) + 1);
       const dist = distanceMap(map.tiles, map.w, map.h, map.entrance);
       for (let i = 0; i < map.tiles.length; i++) {
         if (isWalkable(map.tiles[i]!)) expect(dist[i], `seed ${seed} tile ${i}`).toBeGreaterThanOrEqual(0);
       }
       expect(map.tiles[map.stairs.y * map.w + map.stairs.x]).toBe(Tile.StairsDown);
-      expect(dist[map.stairs.y * map.w + map.stairs.x]).toBeGreaterThanOrEqual(MIN_STAIRS_DISTANCE);
+      expect(dist[map.stairs.y * map.w + map.stairs.x]).toBeGreaterThanOrEqual(4);
       // Border is solid.
       for (let x = 0; x < map.w; x++) {
         expect(map.tiles[x]).toBe(Tile.Wall);
@@ -217,7 +220,7 @@ describe('light prototype', () => {
         for (const t of map.traps) {
           const x = t % map.w;
           const y = Math.floor(t / map.w);
-          expect(Math.max(Math.abs(x - map.entrance.x), Math.abs(y - map.entrance.y))).toBeGreaterThan(3);
+          expect(Math.max(Math.abs(x - map.entrance.x), Math.abs(y - map.entrance.y))).toBeGreaterThan(2);
           expect(map.tiles[t]).toBe(Tile.Floor);
         }
         // Heartstones never cut anything off.
@@ -313,5 +316,89 @@ describe('light prototype', () => {
     setLantern(game, 'a', true);
     for (let i = 0; i < HEART_CHARGE_TICKS + 5; i++) step(game);
     expect(game.hearts[0]!.charge).toBe(0);
+  });
+});
+
+describe('compact floors and the Jitters', () => {
+  it('beginner floors have 1–2 rooms and deeper floors grow up to 5, all compact', () => {
+    const counts: Record<number, Set<number>> = {};
+    for (let seed = 1; seed <= 150; seed++) {
+      for (const floor of [1, 2, 3, 6]) {
+        const map = generateFloor(seed, floor, 2);
+        (counts[floor] ??= new Set()).add(map.rooms.length);
+        // Far smaller than the old 80×50 dungeon floors.
+        expect(map.w * map.h).toBeLessThan(80 * 50 * 0.6);
+      }
+    }
+    expect([...counts[1]!].every((n) => n >= 1 && n <= 2)).toBe(true);
+    expect(counts[1]!.has(1)).toBe(true);
+    expect([...counts[6]!].every((n) => n >= 3 && n <= 5)).toBe(true);
+    expect(counts[6]!.has(5)).toBe(true);
+  });
+
+  it('fits 4 Heartstones (8 players) even on beginner floors', () => {
+    for (let seed = 1; seed <= 60; seed++) expect(generateFloor(seed, 1, 4).hearts.length).toBe(4);
+  });
+
+  const darkGame = () => {
+    const game = createGame(5, [
+      { id: 'a', name: 'A', color: 1 },
+      { id: 'b', name: 'B', color: 2 },
+    ]);
+    game.map.sunshafts = []; // pitch black everywhere
+    return game;
+  };
+
+  it('the Jitters fill in the dark, faster alone, and a full meter means panic', () => {
+    const game = darkGame();
+    const [a, b] = [game.players.get('a')!, game.players.get('b')!];
+    // Move them apart so neither has a friend nearby.
+    b.x = a.x + 5;
+    step(game);
+    expect(a.jitters).toBe(JITTERS_DARK);
+    b.x = a.x; // together now
+    b.y = a.y;
+    step(game);
+    expect(a.jitters).toBe(JITTERS_DARK + JITTERS_DARK_WITH_FRIEND);
+    a.jitters = JITTERS_MAX - 1;
+    step(game);
+    expect(a.panic).toBe(true);
+    // Panicking critters ignore input and can't light a lantern.
+    queueIntent(game, 'a', 99, { kind: 'wait' });
+    expect(a.queue.length).toBe(0);
+    setLantern(game, 'a', true);
+    expect(a.lit).toBe(false);
+  });
+
+  it('a panicking critter runs around on its own, and light calms it back down', () => {
+    const game = darkGame();
+    const [a, b] = [game.players.get('a')!, game.players.get('b')!];
+    a.jitters = JITTERS_MAX;
+    step(game);
+    expect(a.panic).toBe(true);
+    const start = [a.x, a.y];
+    for (let i = 0; i < 10; i++) step(game);
+    expect([a.x, a.y]).not.toEqual(start);
+    // A friend with a lantern walks over: light calms the meter down to zero.
+    b.x = a.x;
+    b.y = a.y;
+    setLantern(game, 'b', true);
+    for (let i = 0; i < Math.ceil(JITTERS_MAX / JITTERS_CALM) + 5 && a.panic; i++) {
+      b.x = a.x;
+      b.y = a.y;
+      step(game);
+    }
+    expect(a.panic).toBe(false);
+    expect(a.jitters).toBe(0);
+  });
+
+  it('the run ends when every critter panics at once', () => {
+    const game = darkGame();
+    for (const p of game.players.values()) p.jitters = JITTERS_MAX;
+    step(game);
+    expect(game.runOver).toBe(true);
+    const tick = game.tick;
+    step(game);
+    expect(game.tick).toBe(tick); // nothing moves after the run ends
   });
 });

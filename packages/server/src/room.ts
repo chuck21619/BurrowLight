@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import {
   MAX_PLAYERS,
+  JITTERS_MAX,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
   TICK_MS,
@@ -166,6 +167,7 @@ export class Room {
         traps: game.newlyRevealed,
         heartCharge,
         open: game.exitOpen,
+        runOver: game.runOver,
       });
     }
   }
@@ -180,7 +182,17 @@ export class Room {
     for (const p of this.game!.players.values()) {
       const m = this.members.get(p.id);
       const game = this.game!;
-      out.push([p.id, p.x, p.y, m?.peer ? 1 : 0, p.lit ? 1 : 0, p.oil, Math.max(0, p.koUntil - game.tick)]);
+      out.push([
+        p.id,
+        p.x,
+        p.y,
+        m?.peer ? 1 : 0,
+        p.lit ? 1 : 0,
+        p.oil,
+        Math.max(0, p.koUntil - game.tick),
+        Math.round((p.jitters / JITTERS_MAX) * 100),
+        p.panic ? 1 : 0,
+      ]);
     }
     return out;
   }
@@ -206,6 +218,7 @@ export class Room {
       heartCharge: game.hearts.map((h) => h.charge),
       traps: [...game.revealedTraps],
       open: game.exitOpen,
+      runOver: game.runOver,
     });
   }
 

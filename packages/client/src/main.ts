@@ -160,7 +160,7 @@ function lobbyRow(p: LobbyPlayer, host: boolean, you: boolean) {
 
 game.onPartyChange = (players) => {
   $('party').replaceChildren(
-    ...players.map(({ info, connected, you, lit, oil, ko }) => {
+    ...players.map(({ info, connected, you, lit, oil, ko, jitters, panic }) => {
       const li = document.createElement('li');
       if (!connected) li.className = 'away';
       const dot = document.createElement('span');
@@ -169,7 +169,15 @@ game.onPartyChange = (players) => {
       const text = document.createElement('div');
       text.className = 'member';
       const name = document.createElement('span');
-      const state = ko > 0 ? ' · seeing stars' : !connected ? ' · dozing' : lit ? ' · lantern lit' : '';
+      const state = panic
+        ? ' · has the jitters!'
+        : ko > 0
+          ? ' · seeing stars'
+          : !connected
+            ? ' · dozing'
+            : lit
+              ? ' · lantern lit'
+              : '';
       name.textContent = `${info.name}${you ? ' (you)' : ''}${state}`;
       const bar = document.createElement('div');
       bar.className = 'oil';
@@ -178,12 +186,31 @@ game.onPartyChange = (players) => {
       fill.style.width = `${Math.round((oil / MAX_OIL) * 100)}%`;
       bar.title = `Oil: ${Math.ceil(oil / 10)} seconds of light`;
       bar.append(fill);
-      text.append(name, bar);
+      const jit = document.createElement('div');
+      jit.className = 'jitters';
+      jit.title = 'The Jitters: fills in the dark, calms in light';
+      const jitFill = document.createElement('div');
+      jitFill.className = panic ? 'jitters-fill panic' : 'jitters-fill';
+      jitFill.style.width = `${jitters}%`;
+      jit.append(jitFill);
+      text.append(name, bar, jit);
       li.append(dot, text);
       return li;
     }),
   );
 };
+
+game.onRunOver = () => {
+  $('runover').hidden = false;
+};
+$('again').addEventListener('click', () => {
+  try {
+    sessionStorage.clear();
+  } catch {
+    /* ignore */
+  }
+  location.href = location.pathname;
+});
 
 let floorText = '';
 game.onObjective = ({ charged, total, open }) => {

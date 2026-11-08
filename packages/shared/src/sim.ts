@@ -13,6 +13,11 @@ import {
   OIL_PER_TICK,
   START_OIL,
   SUNSHAFT_RADIUS,
+  JITTERS_CALM,
+  JITTERS_DARK,
+  JITTERS_DARK_WITH_FRIEND,
+  JITTERS_MAX,
+  type Dir,
   ActionCost,
   actionCost,
   heartsForParty,
@@ -20,7 +25,7 @@ import {
   resolveMove,
   type Action,
 } from './rules';
-import { hashSeed } from './rng';
+import { createRng, hashSeed } from './rng';
 
 export interface QueuedIntent {
   seq: number;
@@ -45,6 +50,12 @@ export interface PlayerState {
   oil: number;
   /** Knocked out by a trap until this tick. */
   koUntil: number;
+  /** The Jitters meter, 0..JITTERS_MAX. */
+  jitters: number;
+  /** Panicking: scurries around on its own until light calms the meter all the way down. */
+  panic: boolean;
+  /** Direction a panicking critter last ran in, so it dashes rather than vibrates. */
+  panicDir: Dir | null;
 }
 
 export interface HeartState {
@@ -71,6 +82,8 @@ export interface GameState {
   light: LightMap;
   /** True for the step in which the party went down to a new floor. */
   descended: boolean;
+  /** Everyone panicked at the same time. */
+  runOver: boolean;
 }
 
 export interface NewPlayer {
@@ -85,6 +98,7 @@ export function createGame(seed: number, players: NewPlayer[]): GameState {
     floor: 0,
     tick: 0,
     players: new Map<string, PlayerState>(),
+    runOver: false,
   } as GameState;
   players.forEach((p, i) => {
     state.players.set(p.id, {
@@ -99,6 +113,9 @@ export function createGame(seed: number, players: NewPlayer[]): GameState {
       lit: false,
       oil: START_OIL,
       koUntil: 0,
+      jitters: 0,
+      panic: false,
+      panicDir: null,
     });
   });
   enterFloor(state, 1);
@@ -136,8 +153,8 @@ export function queueIntent(state: GameState, playerId: string, seq: number, act
   if (!p) return;
   const lastSeq = p.queue.length ? p.queue[p.queue.length - 1]!.seq : p.lastAck;
   if (seq <= lastSeq) return; // duplicate or out of order
-  if (state.tick < p.koUntil) {
-    p.lastAck = seq; // seeing stars: input is dropped, not saved for later
+  if (state.tick < p.koUntil || p.panic || state.runOver) {
+    p.lastAck = seq; // seeing stars or panicking: input is dropped, not saved for later
     return;
   }
   const real = p.queue.filter((q) => q.action !== null).length;
@@ -147,7 +164,7 @@ export function queueIntent(state: GameState, playerId: string, seq: number, act
 /** Light or douse a lantern. Can't light it without oil. Applies straight away. */
 export function setLantern(state: GameState, playerId: string, on: boolean): void {
   const p = state.players.get(playerId);
-  if (p) p.lit = on && p.oil > 0;
+  if (p && !p.panic && !state.runOver) p.lit = on && p.oil > 0;
 }
 
 export function removePlayer(state: GameState, playerId: string): void {
@@ -161,6 +178,7 @@ export interface StepOptions {
 
 /** Advance one tick. */
 export function step(state: GameState, opts: StepOptions = {}): void {
+  if (state.runOver) return;
   state.tick++;
   state.newlyExplored = [];
   state.newlyRevealed = [];
@@ -169,6 +187,9 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   const tile = mapTile(state.map);
 
   for (const p of order) {
+    if (p.panic && state.tick >= p.readyAt) {
+      p.queue.push({ seq: p.lastAck, action: { kind: 'move', dir: panicStep(state, p) } });
+    }
     dropNoops(p);
     if (state.tick < p.readyAt || p.queue.length === 0) continue;
     const { seq, action } = p.queue.shift()!;
@@ -207,6 +228,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   }
 
   updateLight(state);
+  updateJitters(state, order);
 
   for (const h of state.hearts) {
     const lit = state.light.level[h.y * state.map.w + h.x]! >= HEART_NEED;
@@ -223,6 +245,45 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       state.descended = true;
     }
   }
+}
+
+/**
+ * The Jitters fill in the dark (slower with a friend right next to you) and calm in any light.
+ * A full meter means panic: the critter drops its lantern light and scurries off until light
+ * calms it all the way down. If every critter panics at once, the run is over.
+ */
+function updateJitters(state: GameState, order: PlayerState[]): void {
+  const { level } = state.light;
+  const w = state.map.w;
+  for (const p of order) {
+    if (level[p.y * w + p.x]! > 0) {
+      p.jitters = Math.max(0, p.jitters - JITTERS_CALM);
+    } else {
+      const friend = order.some((q) => q !== p && Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= 1);
+      p.jitters = Math.min(JITTERS_MAX, p.jitters + (friend ? JITTERS_DARK_WITH_FRIEND : JITTERS_DARK));
+    }
+    if (!p.panic && p.jitters >= JITTERS_MAX) {
+      p.panic = true;
+      p.lit = false;
+      p.panicDir = null;
+      clearQueue(p);
+    } else if (p.panic && p.jitters === 0) {
+      p.panic = false;
+    }
+  }
+  if (order.length > 0 && order.every((p) => p.panic)) state.runOver = true;
+}
+
+const ALL_DIRS: Dir[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+
+/** A panicking critter dashes in one direction and veers off at random. */
+function panicStep(state: GameState, p: PlayerState): Dir {
+  const rng = createRng(hashSeed(state.seed, state.tick, p.joinOrder));
+  const tile = mapTile(state.map);
+  const open = ALL_DIRS.filter((d) => resolveMove(tile, p.x, p.y, d, alliesNeverBlock) === d);
+  if (p.panicDir && open.includes(p.panicDir) && rng.chance(0.8)) return p.panicDir;
+  p.panicDir = open.length ? rng.pick(open) : 'n';
+  return p.panicDir;
 }
 
 function dropNoops(p: PlayerState): void {

@@ -15,12 +15,21 @@ export const BASE_SPEED = 100;
 // ---- Light prototype tuning (all in ticks; 10 ticks = 1 second) ----
 export const LANTERN_RADIUS = 4;
 export const SUNSHAFT_RADIUS = 3;
-/** Oil at the start of a run: 1500 ticks = 150 seconds of lantern light. */
-export const START_OIL = 1500;
+/** Oil at the start of a run: 900 ticks = 90 seconds of lantern light (floors are small now). */
+export const START_OIL = 900;
 export const OIL_PER_TICK = 1;
 /** Oil topped up when the party goes down a floor. */
-export const OIL_PER_FLOOR = 600;
-export const MAX_OIL = 2000;
+export const OIL_PER_FLOOR = 450;
+export const MAX_OIL = 1500;
+
+// The Jitters: critters get jittery in the dark. A full meter means panic.
+export const JITTERS_MAX = 600;
+/** Per tick in the dark alone: full in 30 s. */
+export const JITTERS_DARK = 2;
+/** Per tick in the dark with a friend within 1 tile: full in 60 s. */
+export const JITTERS_DARK_WITH_FRIEND = 1;
+/** Per tick standing in any light: calms from full in 10 s. */
+export const JITTERS_CALM = 6;
 /** How long a booby trap knocks you out. */
 export const KO_TICKS = 30;
 /** Light level a Heartstone needs (two sources at once), and how long it must be held. */

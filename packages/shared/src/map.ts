@@ -11,10 +11,6 @@ export const Tile = {
 } as const;
 export type TileType = (typeof Tile)[keyof typeof Tile];
 
-// Puzzle floors are smaller than the old dungeon floors so a lantern's oil can cover one.
-export const MAP_W = 56;
-export const MAP_H = 36;
-
 export interface Point {
   x: number;
   y: number;
@@ -48,23 +44,135 @@ export function tileAt(map: FloorMap, x: number, y: number): number {
   return map.tiles[y * map.w + x]!;
 }
 
-const MIN_LEAF = 10;
-/** The way down is at least this many steps from the entrance. */
-export const MIN_STAIRS_DISTANCE = 22;
-const MAX_DEPTH = 5;
+/** How many rooms a floor has: beginner floors are small, deeper floors grow to 5. */
+export function roomCountFor(floor: number, rng: Rng): number {
+  if (floor <= 1) return rng.int(1, 2);
+  if (floor === 2) return rng.int(2, 3);
+  if (floor === 3) return rng.int(2, 4);
+  return rng.int(3, 5);
+}
 
-/** Rootcellar floor: BSP rooms joined by tunnels. Same seed + floor + heart count => same map. */
-export function generateFloor(seed: number, floor = 1, heartCount = 1, w = MAP_W, h = MAP_H): FloorMap {
+/**
+ * A compact puzzle floor: 1–5 small rooms close together, joined by short tunnels.
+ * Same seed + floor + heart count => same map.
+ */
+export function generateFloor(seed: number, floor = 1, heartCount = 1): FloorMap {
   const rng = createRng(hashSeed(seed, floor, heartCount));
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const map = tryGenerate(rng, w, h);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const map = tryGenerate(rng, roomCountFor(floor, rng));
     if (map && placeFeatures(rng, map, heartCount)) return map;
   }
   throw new Error(`could not generate floor for seed ${seed}`);
 }
 
-const TRAP_CHANCE_ROOM = 0.035;
-const TRAP_CHANCE_CORRIDOR = 0.02;
+const ROOM_GAP = 2; // walls between rooms, so a tunnel is at least 1 tile long
+const MAX_REACH = 6; // each new room sits within this many tiles of an existing one
+
+function tryGenerate(rng: Rng, roomCount: number): FloorMap | null {
+  // Lay rooms out on a generous canvas, then crop to what's used.
+  const cw = 14 + roomCount * 12;
+  const ch = 12 + roomCount * 7;
+  const rooms: Rect[] = [];
+  for (let k = 0; k < roomCount; k++) {
+    let placed = false;
+    for (let tries = 0; tries < 300 && !placed; tries++) {
+      const r = { w: rng.int(6, 11), h: rng.int(5, 8), x: 0, y: 0 };
+      r.x = rng.int(1, cw - r.w - 1);
+      r.y = rng.int(1, ch - r.h - 1);
+      if (rooms.some((o) => gapBetween(o, r) < ROOM_GAP)) continue;
+      if (rooms.length && !rooms.some((o) => gapBetween(o, r) <= MAX_REACH)) continue;
+      rooms.push(r);
+      placed = true;
+    }
+    if (!placed) return null;
+  }
+
+  const tiles = new Uint8Array(cw * ch);
+  const carve = (x: number, y: number) => {
+    if (x > 0 && y > 0 && x < cw - 1 && y < ch - 1) tiles[y * cw + x] = Tile.Floor;
+  };
+  for (const r of rooms) for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) carve(x, y);
+
+  // Join rooms with a minimum spanning tree of short L-shaped tunnels...
+  const joined = [0];
+  const links: [number, number][] = [];
+  while (joined.length < rooms.length) {
+    let best: [number, number] = [0, 0];
+    let bestD = Infinity;
+    for (const a of joined)
+      for (let b = 0; b < rooms.length; b++) {
+        if (joined.includes(b)) continue;
+        const d = dist(center(rooms[a]!), center(rooms[b]!));
+        if (d < bestD) {
+          bestD = d;
+          best = [a, b];
+        }
+      }
+    joined.push(best[1]);
+    links.push(best);
+  }
+  // ...plus, on bigger floors, one extra loop so there's more than one way around.
+  if (rooms.length >= 4 && rng.chance(0.6)) {
+    const a = rng.int(0, rooms.length - 1);
+    const b = rng.int(0, rooms.length - 1);
+    if (a !== b && !links.some(([p, q]) => (p === a && q === b) || (p === b && q === a))) links.push([a, b]);
+  }
+  for (const [a, b] of links) {
+    const p = center(rooms[a]!);
+    const q = center(rooms[b]!);
+    if (rng.chance(0.5)) {
+      for (let x = Math.min(p.x, q.x); x <= Math.max(p.x, q.x); x++) carve(x, p.y);
+      for (let y = Math.min(p.y, q.y); y <= Math.max(p.y, q.y); y++) carve(q.x, y);
+    } else {
+      for (let y = Math.min(p.y, q.y); y <= Math.max(p.y, q.y); y++) carve(p.x, y);
+      for (let x = Math.min(p.x, q.x); x <= Math.max(p.x, q.x); x++) carve(x, q.y);
+    }
+  }
+
+  // Crop to the used area plus a 1-tile wall border.
+  let minX = cw;
+  let minY = ch;
+  let maxX = 0;
+  let maxY = 0;
+  for (let i = 0; i < tiles.length; i++) {
+    if (tiles[i] === Tile.Wall) continue;
+    const x = i % cw;
+    const y = (i - x) / cw;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  const ox = minX - 1;
+  const oy = minY - 1;
+  const w = maxX - minX + 3;
+  const h = maxY - minY + 3;
+  const cropped = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) cropped[y * w + x] = tiles[(y + oy) * cw + x + ox]!;
+  const shifted = rooms.map((r) => ({ ...r, x: r.x - ox, y: r.y - oy }));
+
+  const entrance = center(shifted[0]!);
+  const dmap = distanceMap(cropped, w, h, entrance);
+  let stairs = entrance;
+  let far = -1;
+  for (let i = 0; i < cropped.length; i++) {
+    if (cropped[i] === Tile.Wall) continue;
+    if (dmap[i]! < 0) return null; // unreachable floor: try again
+    const pt = { x: i % w, y: Math.floor(i / w) };
+    if (dmap[i]! > far && shifted.some((r) => inside(r, pt))) {
+      far = dmap[i]!;
+      stairs = pt;
+    }
+  }
+  if (far < 4) return null;
+  cropped[stairs.y * w + stairs.x] = Tile.StairsDown;
+  return { w, h, tiles: cropped, rooms: shifted, entrance, stairs, sunshafts: [], hearts: [], traps: [] };
+}
+
+const TRAP_CHANCE_ROOM = 0.04;
+const TRAP_CHANCE_CORRIDOR = 0.03;
+/** Nothing dangerous or important this close to where the party starts. */
+const SAFE_START_RADIUS = 2;
 
 /**
  * Sunshafts, Heartstones and hidden traps. Every floor starts in a sunshaft so the party can see.
@@ -73,6 +181,7 @@ const TRAP_CHANCE_CORRIDOR = 0.02;
 function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
   const { w, tiles } = map;
   const idx = (p: Point) => p.y * w + p.x;
+  const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
   const roomOf = (p: Point) => map.rooms.find((r) => inside(r, p));
   const entranceRoom = roomOf(map.entrance)!;
   const stairsRoom = roomOf(map.stairs);
@@ -83,7 +192,7 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
         let open = true;
         for (let dy = -1; dy <= 1 && open; dy++)
           for (let dx = -1; dx <= 1 && open; dx++) if (tiles[(y + dy) * w + x + dx] !== Tile.Floor) open = false;
-        if (open) out.push({ x, y });
+        if (open && cheb({ x, y }, map.entrance) > SAFE_START_RADIUS + 1) out.push({ x, y });
       }
     return out;
   };
@@ -91,13 +200,16 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
   tiles[idx(map.entrance)] = Tile.Sunshaft;
   map.sunshafts.push(map.entrance);
 
-  // Heartstones: rooms other than the entrance's, preferring ones without the stairs.
-  const candidates = map.rooms.filter((r) => r !== entranceRoom && interior(r).length > 0);
-  const preferred = candidates.filter((r) => r !== stairsRoom);
-  const pool = [...shuffle(rng, preferred), ...candidates.filter((r) => r === stairsRoom)];
-  if (pool.length < heartCount) return false;
-  for (const room of pool.slice(0, heartCount)) {
-    const spots = interior(room);
+  // Heartstones: other rooms first, then the stairs room, then the entrance room (one-room floors).
+  const others = shuffle(
+    rng,
+    map.rooms.filter((r) => r !== entranceRoom && r !== stairsRoom),
+  );
+  const order = [...others, ...map.rooms.filter((r) => r === stairsRoom && r !== entranceRoom), entranceRoom];
+  for (let k = 0; k < heartCount; k++) {
+    // Spread across rooms; when there are more Heartstones than rooms, rooms take several.
+    const room = order[k % order.length]!;
+    const spots = interior(room).filter((p) => map.hearts.every((hp) => cheb(hp, p) >= 3));
     if (spots.length === 0) return false;
     const heart = rng.pick(spots);
     tiles[idx(heart)] = Tile.Heartstone;
@@ -107,7 +219,7 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
       const near: Point[] = [];
       for (let y = room.y; y < room.y + room.h; y++)
         for (let x = room.x; x < room.x + room.w; x++) {
-          const d = Math.max(Math.abs(x - heart.x), Math.abs(y - heart.y));
+          const d = cheb({ x, y }, heart);
           if (d >= 2 && d <= 3 && tiles[y * w + x] === Tile.Floor) near.push({ x, y });
         }
       if (near.length) {
@@ -118,131 +230,22 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
     }
   }
 
-  // A couple of extra sunshafts elsewhere.
-  for (const room of shuffle(rng, map.rooms.filter((r) => r !== entranceRoom)).slice(0, 2)) {
-    const c = { x: room.x + Math.floor(room.w / 2), y: room.y + Math.floor(room.h / 2) };
-    if (tiles[idx(c)] === Tile.Floor) {
-      tiles[idx(c)] = Tile.Sunshaft;
-      map.sunshafts.push(c);
-    }
-  }
-
   // Hidden traps: never near the entrance, next to a Heartstone, or on special tiles.
   for (let i = 0; i < tiles.length; i++) {
     if (tiles[i] !== Tile.Floor) continue;
     const p = { x: i % w, y: Math.floor(i / w) };
-    if (Math.max(Math.abs(p.x - map.entrance.x), Math.abs(p.y - map.entrance.y)) <= 3) continue;
-    if (map.hearts.some((hrt) => Math.max(Math.abs(p.x - hrt.x), Math.abs(p.y - hrt.y)) <= 1)) continue;
+    if (cheb(p, map.entrance) <= SAFE_START_RADIUS) continue;
+    if (map.hearts.some((hp) => cheb(p, hp) <= 1)) continue;
     if (rng.chance(roomOf(p) ? TRAP_CHANCE_ROOM : TRAP_CHANCE_CORRIDOR)) map.traps.push(i);
   }
   return true;
 }
 
-function shuffle<T>(rng: Rng, items: T[]): T[] {
-  const a = [...items];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = rng.int(0, i);
-    [a[i], a[j]] = [a[j]!, a[i]!];
-  }
-  return a;
-}
-
-function tryGenerate(rng: Rng, w: number, h: number): FloorMap | null {
-  const tiles = new Uint8Array(w * h); // all walls
-  const carve = (x: number, y: number) => {
-    if (x > 0 && y > 0 && x < w - 1 && y < h - 1) tiles[y * w + x] = Tile.Floor;
-  };
-
-  const build = (node: Rect, depth: number): Rect[] => {
-    const canSplitV = node.w >= MIN_LEAF * 2;
-    const canSplitH = node.h >= MIN_LEAF * 2;
-    if (depth >= MAX_DEPTH || (!canSplitV && !canSplitH)) {
-      // Leaf: carve one room inside it.
-      const rw = rng.int(4, Math.min(14, node.w - 2));
-      const rh = rng.int(4, Math.min(9, node.h - 2));
-      const rx = node.x + rng.int(1, node.w - rw - 1);
-      const ry = node.y + rng.int(1, node.h - rh - 1);
-      for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) carve(x, y);
-      return [{ x: rx, y: ry, w: rw, h: rh }];
-    }
-    let vertical: boolean;
-    if (canSplitV && !canSplitH) vertical = true;
-    else if (canSplitH && !canSplitV) vertical = false;
-    else if (node.w > node.h * 1.25) vertical = true;
-    else if (node.h > node.w * 1.25) vertical = false;
-    else vertical = rng.chance(0.5);
-
-    let a: Rect;
-    let b: Rect;
-    if (vertical) {
-      const cut = rng.int(MIN_LEAF, node.w - MIN_LEAF);
-      a = { x: node.x, y: node.y, w: cut, h: node.h };
-      b = { x: node.x + cut, y: node.y, w: node.w - cut, h: node.h };
-    } else {
-      const cut = rng.int(MIN_LEAF, node.h - MIN_LEAF);
-      a = { x: node.x, y: node.y, w: node.w, h: cut };
-      b = { x: node.x, y: node.y + cut, w: node.w, h: node.h - cut };
-    }
-    const roomsA = build(a, depth + 1);
-    const roomsB = build(b, depth + 1);
-
-    // Join the closest pair of rooms across the split with an L-shaped tunnel.
-    let best: [Rect, Rect] = [roomsA[0]!, roomsB[0]!];
-    let bestD = Infinity;
-    for (const ra of roomsA) {
-      for (const rb of roomsB) {
-        const d = Math.abs(center(ra).x - center(rb).x) + Math.abs(center(ra).y - center(rb).y);
-        if (d < bestD) {
-          bestD = d;
-          best = [ra, rb];
-        }
-      }
-    }
-    const p = center(best[0]);
-    const q = center(best[1]);
-    if (rng.chance(0.5)) {
-      for (let x = Math.min(p.x, q.x); x <= Math.max(p.x, q.x); x++) carve(x, p.y);
-      for (let y = Math.min(p.y, q.y); y <= Math.max(p.y, q.y); y++) carve(q.x, y);
-    } else {
-      for (let y = Math.min(p.y, q.y); y <= Math.max(p.y, q.y); y++) carve(p.x, y);
-      for (let x = Math.min(p.x, q.x); x <= Math.max(p.x, q.x); x++) carve(x, q.y);
-    }
-    return roomsA.concat(roomsB);
-  };
-
-  const rooms = build({ x: 0, y: 0, w, h }, 0);
-  if (rooms.length < 4) return null;
-
-  const entranceRoom = rng.pick(rooms);
-  const entrance = center(entranceRoom);
-
-  // Connectivity check + furthest tile by path distance.
-  const dist = distanceMap(tiles, w, h, entrance);
-  let floorCount = 0;
-  let stairs = entrance;
-  let far = -1;
-  for (let i = 0; i < tiles.length; i++) {
-    if (tiles[i] === Tile.Wall) continue;
-    floorCount++;
-    const d = dist[i]!;
-    if (d < 0) return null; // unreachable floor: regenerate
-    const pt = { x: i % w, y: Math.floor(i / w) };
-    if (d > far && rooms.some((r) => inside(r, pt))) {
-      far = d;
-      stairs = pt;
-    }
-  }
-  if (floorCount < 200 || far < MIN_STAIRS_DISTANCE) return null;
-  tiles[stairs.y * w + stairs.x] = Tile.StairsDown;
-
-  return { w, h, tiles, rooms, entrance, stairs, sunshafts: [], hearts: [], traps: [] };
-}
-
 /** Breadth-first path distance from `from` over walkable tiles; -1 = unreachable. */
 export function distanceMap(tiles: Uint8Array, w: number, h: number, from: Point): Int32Array {
-  const dist = new Int32Array(w * h).fill(-1);
+  const d = new Int32Array(w * h).fill(-1);
   const start = from.y * w + from.x;
-  dist[start] = 0;
+  d[start] = 0;
   const queue = [start];
   for (let qi = 0; qi < queue.length; qi++) {
     const i = queue[qi]!;
@@ -258,26 +261,43 @@ export function distanceMap(tiles: Uint8Array, w: number, h: number, from: Point
       const ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
       const ni = ny * w + nx;
-      if (dist[ni] !== -1 || !isWalkable(tiles[ni]!)) continue;
-      dist[ni] = dist[i]! + 1;
+      if (d[ni] !== -1 || !isWalkable(tiles[ni]!)) continue;
+      d[ni] = d[i]! + 1;
       queue.push(ni);
     }
   }
-  return dist;
+  return d;
 }
 
 /** The first `count` walkable tiles nearest to `from` (for spawning a party together). */
 export function spawnPoints(map: FloorMap, from: Point, count: number): Point[] {
-  const dist = distanceMap(map.tiles, map.w, map.h, from);
+  const d = distanceMap(map.tiles, map.w, map.h, from);
   const traps = new Set(map.traps);
   const cells: { i: number; d: number }[] = [];
-  for (let i = 0; i < dist.length; i++) {
+  for (let i = 0; i < d.length; i++) {
     const t = map.tiles[i];
-    if (dist[i]! >= 0 && (t === Tile.Floor || t === Tile.Sunshaft) && !traps.has(i)) cells.push({ i, d: dist[i]! });
+    if (d[i]! >= 0 && (t === Tile.Floor || t === Tile.Sunshaft) && !traps.has(i)) cells.push({ i, d: d[i]! });
   }
   cells.sort((a, b) => a.d - b.d || a.i - b.i);
   return cells.slice(0, count).map(({ i }) => ({ x: i % map.w, y: Math.floor(i / map.w) }));
 }
 
+function shuffle<T>(rng: Rng, items: T[]): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = rng.int(0, i);
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
+}
+
+/** Empty tiles between two rooms (0 = touching or overlapping). */
+function gapBetween(a: Rect, b: Rect): number {
+  const gx = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
+  const gy = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h));
+  return Math.max(gx, gy);
+}
+
 const center = (r: Rect): Point => ({ x: r.x + Math.floor(r.w / 2), y: r.y + Math.floor(r.h / 2) });
+const dist = (a: Point, b: Point): number => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 const inside = (r: Rect, p: Point): boolean => p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;

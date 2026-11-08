@@ -24,8 +24,21 @@ export interface PlayerInfo {
   color: number;
 }
 
-/** Per-tick player state. `ko` = ticks left seeing stars (0 = awake). */
-export type PlayerPos = [id: string, x: number, y: number, connected: 0 | 1, lit: 0 | 1, oil: number, ko: number];
+/**
+ * Per-tick player state. `ko` = ticks left seeing stars (0 = awake);
+ * `jitters` = 0–100 (% of the meter); `panic` = 1 while panicking.
+ */
+export type PlayerPos = [
+  id: string,
+  x: number,
+  y: number,
+  connected: 0 | 1,
+  lit: 0 | 1,
+  oil: number,
+  ko: number,
+  jitters: number,
+  panic: 0 | 1,
+];
 
 export type ServerMessage =
   | { t: 'error'; message: string }
@@ -51,6 +64,7 @@ export type ServerMessage =
       /** Trap tile indices the party has seen so far. */
       traps: number[];
       open: boolean;
+      runOver: boolean;
     }
   | {
       t: 'tick';
@@ -64,6 +78,8 @@ export type ServerMessage =
       traps: number[];
       heartCharge: number[];
       open: boolean;
+      /** Everyone panicked at once: the run is over. */
+      runOver: boolean;
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z
