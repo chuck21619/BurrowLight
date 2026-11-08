@@ -39,6 +39,8 @@ const DIAGONAL_GRACE_MS = 40;
 const SHARE_SPREAD_PX = 20;
 /** In the dark, another critter shows (as an outline) only within this many tiles of you. */
 const SEE_FRIEND_IN_DARK = 2;
+/** Every critter's outline in the dark is the same dark purple, not its own color. */
+const DARK_OUTLINE = 0x7a5cb8;
 const LABEL_STACK_PX = 15;
 /** After you toggle your lantern, trust your own toggle over the server for this long. */
 const LANTERN_PREDICT_MS = 400;
@@ -711,7 +713,7 @@ export class GameView {
     const outline = new Sprite(this.tex.critterOutline);
     outline.anchor.set(0.5);
     outline.scale.set(SCALE);
-    outline.tint = info.color;
+    outline.tint = DARK_OUTLINE;
     outline.alpha = 0.85;
     outline.visible = false;
     const lamp = new Sprite(this.tex.lantern);
@@ -837,8 +839,8 @@ export class GameView {
 
   /**
    * Critters are hidden by the dark too. In light: drawn normally. In the dark: your own critter is
-   * just an outline (plus its daze stars); a friend shows as an outline only when within a couple of
-   * tiles of you, and otherwise can't be seen at all.
+   * just a dark purple outline with its name tag (plus its daze stars); a friend shows the same way
+   * only when within a couple of tiles of you, and otherwise can't be seen at all.
    */
   private applyDarkness(a: Avatar): void {
     const me = this.avatars.get(this.you);
@@ -850,7 +852,8 @@ export class GameView {
     a.body.visible = mode === 'full';
     a.shadow.visible = mode === 'full';
     a.outline.visible = mode === 'outline';
-    a.label.visible = mode === 'full';
+    a.label.visible = mode !== 'hidden';
+    a.label.alpha = mode === 'full' ? 1 : 0.75;
     a.stars.visible = a.ko > 0 && (mode === 'full' || self);
   }
 
