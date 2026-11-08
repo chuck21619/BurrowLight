@@ -16,6 +16,8 @@ export const BASE_SPEED = 100;
 // ---- Light prototype tuning (all in ticks; 10 ticks = 1 second) ----
 export const LANTERN_RADIUS = 4;
 export const SUNSHAFT_RADIUS = 3;
+/** A lit torch lights this far, burns no oil, and stays lit until the Gloom eats it. */
+export const TORCH_RADIUS = 3;
 /** A focused sunbeam is strong enough to charge a Heartstone on its own. */
 export const BEAM_STRENGTH = 2;
 /** Oil at the start of a run: 900 ticks = 90 seconds of lantern light (floors are small now). */
@@ -57,6 +59,13 @@ export const GLOOM_STEP_RESTLESS = 2;
 export const GLOOM_BRIGHTNESS_WEIGHT = 10;
 export const GLOOM_STONE_BASE = 0.6;
 export const GLOOM_STONE_FULL_BONUS = 2.4;
+/** A lit torch is as tempting as a lantern. */
+export const GLOOM_TORCH_BRIGHTNESS = 1;
+/** Pinned while chasing a critter, the Gloom loses interest in them for 15 s. */
+export const GLOOM_IGNORE_TICKS = 150;
+/** Boss intro: the party watches the Gloom eat a torch (up to 8 s), then a short beat before play. */
+export const BOSS_INTRO_MAX = 80;
+export const BOSS_INTRO_PAUSE = 20;
 /** While pinned in a sunbeam it wriggles one tile every this many ticks: 4 s, then 3 s, then 2 s. */
 export const GLOOM_WRIGGLE = [40, 30, 20] as const;
 /**

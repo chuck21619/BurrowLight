@@ -74,6 +74,10 @@ export type ServerMessage =
       heartMax: number[];
       /** [x, y, pinned, dx, dy, restless, touching] or null. */
       gloom: number[] | null;
+      /** Flat [index, lit, ...] of every torch (drawn once seen, or while lit). */
+      torches: number[];
+      /** Ticks left in a boss introduction (nobody can act). */
+      intro: number;
     }
   | {
       t: 'tick';
@@ -91,6 +95,8 @@ export type ServerMessage =
       runOver: boolean;
       mirrors: number[];
       gloom: number[] | null;
+      torches: number[];
+      intro: number;
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

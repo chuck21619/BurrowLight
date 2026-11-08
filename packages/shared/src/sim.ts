@@ -21,6 +21,11 @@ import {
   GLOOM_STEP_RESTLESS,
   GLOOM_STONE_BASE,
   GLOOM_STONE_FULL_BONUS,
+  GLOOM_TORCH_BRIGHTNESS,
+  GLOOM_IGNORE_TICKS,
+  BOSS_INTRO_MAX,
+  BOSS_INTRO_PAUSE,
+  TORCH_RADIUS,
   GLOOM_TOUCH_COOLDOWN,
   GLOOM_WRIGGLE,
   GREAT_HEART_FULL,
@@ -89,6 +94,10 @@ export interface GloomState {
   touching: boolean;
   /** Tiles between it and the Great Heartstone (0 = touching): the tether drains faster up close. */
   distance: number;
+  /** What it's chasing: 'stone', 'torch', or a critter's id. */
+  target: string | null;
+  /** Critters it has lost interest in (got pinned while chasing them), until this tick. */
+  ignore: Map<string, number>;
 }
 
 export interface HeartState {
@@ -125,6 +134,12 @@ export interface GameState {
   runOver: boolean;
   /** The boss, on boss floors until the Great Heartstone is full. */
   gloom: GloomState | null;
+  /** Torch tile index -> lit. */
+  torches: Map<number, boolean>;
+  /** Boss intro: nobody can act until this tick while the Gloom eats a torch. 0 = no intro. */
+  introUntil: number;
+  /** The torch the Gloom eats in its intro. */
+  introTorch: number;
 }
 
 export interface NewPlayer {
@@ -188,10 +203,15 @@ function enterFloor(state: GameState, n: number): void {
         restless: 0,
         touching: false,
         distance: GLOOM_DRAIN_FAR_DISTANCE,
+        target: null,
+        ignore: new Map(),
       }
     : null;
   state.exitOpen = false;
   state.mirrors = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
+  state.torches = new Map(map.torches.map((t) => [t.y * map.w + t.x, t.lit]));
+  state.introTorch = map.introTorch ? map.introTorch.y * map.w + map.introTorch.x : -1;
+  state.introUntil = map.introTorch ? state.tick + BOSS_INTRO_MAX : 0;
   const order = [...state.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
   const spawns = spawnPoints(map, map.entrance, order.length);
   order.forEach((p, i) => {
@@ -211,7 +231,7 @@ export function queueIntent(state: GameState, playerId: string, seq: number, act
   if (!p) return;
   const lastSeq = p.queue.length ? p.queue[p.queue.length - 1]!.seq : p.lastAck;
   if (seq <= lastSeq) return; // duplicate or out of order
-  if (state.tick < p.koUntil || p.panic || state.runOver) {
+  if (state.tick < p.koUntil || p.panic || state.runOver || inIntro(state)) {
     p.lastAck = seq; // seeing stars or panicking: input is dropped, not saved for later
     return;
   }
@@ -222,7 +242,7 @@ export function queueIntent(state: GameState, playerId: string, seq: number, act
 /** Light or douse a lantern. Can't light it without oil. Applies straight away. */
 export function setLantern(state: GameState, playerId: string, on: boolean): void {
   const p = state.players.get(playerId);
-  if (p && !p.panic && !state.runOver) p.lit = on && p.oil > 0;
+  if (p && !p.panic && !state.runOver && !inIntro(state)) p.lit = on && p.oil > 0;
 }
 
 export function removePlayer(state: GameState, playerId: string): void {
@@ -285,6 +305,21 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     }
   }
 
+  // Carrying a flame over a torch lights it.
+  for (const p of order) {
+    const here = p.y * state.map.w + p.x;
+    if (p.lit && state.torches.get(here) === false) state.torches.set(here, true);
+  }
+
+  if (inIntro(state)) {
+    // The boss introduction: everyone watches the Gloom drift to a torch and eat it.
+    updateLight(state);
+    const moved = updateGloom(state);
+    if (gloomTouches(state, order) || moved) updateLight(state);
+    if (state.torches.get(state.introTorch) === false) state.introUntil = Math.min(state.introUntil, state.tick + BOSS_INTRO_PAUSE);
+    return;
+  }
+
   for (const p of order) {
     if (!p.lit) continue;
     p.oil = Math.max(0, p.oil - OIL_PER_TICK);
@@ -293,7 +328,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
 
   updateLight(state);
   const gloomMoved = updateGloom(state);
-  // A snuffed lantern stops giving light this very tick.
+  // A snuffed lantern or eaten torch stops giving light this very tick.
   if (gloomTouches(state, order) || gloomMoved) updateLight(state);
   updateJitters(state, order);
 
@@ -381,6 +416,7 @@ export function lightSources(state: GameState): LightSource[] {
   const out: LightSource[] = [];
   for (const p of state.players.values()) if (p.lit) out.push({ x: p.x, y: p.y, radius: LANTERN_RADIUS, strength: 1 });
   for (const s of state.map.sunshafts) out.push({ x: s.x, y: s.y, radius: SUNSHAFT_RADIUS, strength: 1 });
+  for (const [i, on] of state.torches) if (on) out.push({ x: i % state.map.w, y: Math.floor(i / state.map.w), radius: TORCH_RADIUS, strength: 1 });
   return out;
 }
 
@@ -426,7 +462,11 @@ function updateGloom(state: GameState): boolean {
   g.pinned = !clear(g.x, g.y);
   settle();
   if (g.pinned) {
-    if (!wasPinned) g.nextWriggleAt = state.tick + GLOOM_WRIGGLE[g.restless]!;
+    if (!wasPinned) {
+      g.nextWriggleAt = state.tick + GLOOM_WRIGGLE[g.restless]!;
+      // Caught while chasing someone: it loses interest in them for a while, so it doesn't hound one critter all fight.
+      if (g.target && g.target !== 'stone' && g.target !== 'torch') g.ignore.set(g.target, state.tick + GLOOM_IGNORE_TICKS);
+    }
     if (state.tick < g.nextWriggleAt) return false;
     g.nextWriggleAt = state.tick + GLOOM_WRIGGLE[g.restless]!;
     const options = STEPS.slice(1).filter(([dx, dy]) => valid(g.x + dx, g.y + dy));
@@ -463,6 +503,7 @@ function updateGloom(state: GameState): boolean {
   }
   const target = chooseLight(state, dist, touchesHeart);
   g.nextStepAt = state.tick + (g.restless ? GLOOM_STEP_RESTLESS : GLOOM_STEP);
+  g.target = target?.what ?? null;
   if (!target) return false;
   // Eyes on the prize.
   const cx = g.x + 0.5;
@@ -479,6 +520,8 @@ function updateGloom(state: GameState): boolean {
 }
 
 interface LightTarget {
+  /** 'stone', 'torch', or a critter's id. */
+  what: string;
   /** The Gloom position (top-left index) to head for. */
   spot: number;
   /** Where its eyes should look. */
@@ -497,21 +540,42 @@ function chooseLight(state: GameState, dist: Map<number, number>, touchesHeart: 
   const heart = state.hearts[0]!;
   let best: LightTarget | null = null;
   let bestScore = -Infinity;
-  const consider = (spot: number, brightness: number, lookX: number, lookY: number) => {
+  const consider = (what: string, spot: number, brightness: number, lookX: number, lookY: number) => {
     const d = dist.get(spot);
     if (d === undefined) return;
     const score = brightness * GLOOM_BRIGHTNESS_WEIGHT - d;
     if (score > bestScore) {
       bestScore = score;
-      best = { spot, lookX, lookY };
+      best = { what, spot, lookX, lookY };
     }
   };
+  const covering = (x: number, y: number) =>
+    [
+      [0, 0],
+      [-1, 0],
+      [0, -1],
+      [-1, -1],
+    ].map(([ox, oy]) => (y + oy!) * w + x + ox!);
+  if (inIntro(state)) {
+    // Its introduction: it only wants the torch it's about to eat.
+    const tx = state.introTorch % w;
+    const ty = Math.floor(state.introTorch / w);
+    if (state.torches.get(state.introTorch)) for (const s of covering(tx, ty)) consider('torch', s, 1, tx, ty);
+    return best;
+  }
   // The Great Heartstone: any spot touching it.
   const stoneBrightness = GLOOM_STONE_BASE + GLOOM_STONE_FULL_BONUS * (heart.charge / heart.max);
-  for (const k of dist.keys()) if (touchesHeart(k % w, Math.floor(k / w))) consider(k, stoneBrightness, heart.x, heart.y);
-  // Lit lanterns: a spot whose footprint covers the critter (so it can eat the light).
+  for (const k of dist.keys()) if (touchesHeart(k % w, Math.floor(k / w))) consider('stone', k, stoneBrightness, heart.x, heart.y);
+  // Lit torches.
+  for (const [i, on] of state.torches) {
+    if (!on) continue;
+    for (const s of covering(i % w, Math.floor(i / w))) consider('torch', s, GLOOM_TORCH_BRIGHTNESS, i % w, Math.floor(i / w));
+  }
+  // Lit lanterns: a spot whose footprint covers the critter (so it can eat the light). Not critters it's lost interest in.
+  const g = state.gloom!;
   const lit = [...state.players.values()].filter((p) => p.lit);
   for (const p of lit) {
+    if ((g.ignore.get(p.id) ?? 0) > state.tick) continue;
     const stack = lit.filter((q) => Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= 1).length;
     for (const [ox, oy] of [
       [0, 0],
@@ -519,7 +583,7 @@ function chooseLight(state: GameState, dist: Map<number, number>, touchesHeart: 
       [0, -1],
       [-1, -1],
     ]) {
-      consider((p.y + oy) * w + p.x + ox, stack, p.x, p.y);
+      consider(p.id, (p.y + oy) * w + p.x + ox, stack, p.x, p.y);
     }
   }
   return best;
@@ -530,6 +594,13 @@ function gloomTouches(state: GameState, order: PlayerState[]): boolean {
   const g = state.gloom;
   if (!g) return false;
   let snuffed = false;
+  // It eats lit torches it drifts over.
+  for (const i of gloomFootprint(state.map.w, g.x, g.y)) {
+    if (state.torches.get(i)) {
+      state.torches.set(i, false);
+      snuffed = true;
+    }
+  }
   const foot = new Set(gloomFootprint(state.map.w, g.x, g.y));
   for (const p of order) {
     if (!foot.has(p.y * state.map.w + p.x) || state.tick - p.gloomTouchAt < GLOOM_TOUCH_COOLDOWN) continue;
@@ -582,6 +653,16 @@ function reveal(state: GameState, i: number): void {
 }
 
 export const heartIndex = (state: GameState, h: { x: number; y: number }): number => h.y * state.map.w + h.x;
+
+/** True during a boss introduction (nobody can act). */
+export const inIntro = (state: GameState): boolean => state.tick < state.introUntil;
+
+/** Torches as a flat [index, lit, ...] list. */
+export function packTorches(state: GameState): number[] {
+  const out: number[] = [];
+  for (const [i, on] of state.torches) out.push(i, on ? 1 : 0);
+  return out;
+}
 
 /** The Gloom for the wire: [x, y, pinned, dx, dy, restless, touching], or null. */
 export function packGloom(state: GameState): number[] | null {

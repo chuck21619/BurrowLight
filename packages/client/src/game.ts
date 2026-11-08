@@ -7,6 +7,7 @@ import {
   LANTERN_RADIUS,
   MAX_QUEUED_INTENTS,
   SUNSHAFT_RADIUS,
+  TORCH_RADIUS,
   Tile,
   actionCost,
   alliesNeverBlock,
@@ -82,6 +83,8 @@ export interface Objective {
   /** On a boss floor: is the Gloom here, and is it pinned? */
   gloom: boolean;
   pinned: boolean;
+  /** The boss introduction is playing. */
+  intro: boolean;
 }
 
 interface Heart {
@@ -133,6 +136,12 @@ export class GameView {
   private mirrorSprites = new Map<number, Sprite>();
   private beamGfx = new Graphics();
   private gloom: Gloom | null = null;
+  private torches = new Map<number, boolean>();
+  private torchSprites = new Map<number, Sprite>();
+  /** Ticks left in a boss intro (input is ignored and the camera watches the Gloom). */
+  private intro = 0;
+  private camX = 0;
+  private camY = 0;
   private gloomView: Container | null = null;
   private gloomEyes = new Graphics();
   private tether = new Graphics();
@@ -198,6 +207,8 @@ export class GameView {
     this.trapSprites.clear();
     this.mirrorSprites.clear();
     this.mirrors.clear();
+    this.torchSprites.clear();
+    this.torches.clear();
     this.emitters = [];
     for (let k = 0; k < msg.emitters.length; k += 3) {
       const i = msg.emitters[k]!;
@@ -207,6 +218,8 @@ export class GameView {
     this.addTiles(msg.tiles);
     for (const t of msg.traps) this.addTrap(t);
     this.setMirrors(msg.mirrors);
+    this.setTorches(msg.torches);
+    this.intro = msg.intro;
     this.markerLayer.addChild(this.beamGfx);
 
     this.hearts = msg.hearts.map((idx, k) => {
@@ -252,6 +265,8 @@ export class GameView {
     });
     this.setOpen(msg.open);
     this.setMirrors(msg.mirrors);
+    this.setTorches(msg.torches);
+    this.intro = msg.intro;
     this.setGloom(msg.gloom, false);
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
@@ -319,6 +334,27 @@ export class GameView {
       } else {
         e.ellipse(ex, -6, 7, 9).fill(0xf3eefc);
         e.circle(ex + g.dx * 3, -6 + g.dy * 4, 3).fill(0x120c1c);
+      }
+    }
+  }
+
+  private setTorches(flat: number[]): void {
+    for (let k = 0; k < flat.length; k += 2) {
+      const i = flat[k]!;
+      const on = flat[k + 1] === 1;
+      let s = this.torchSprites.get(i);
+      if (!s) {
+        s = new Sprite(this.tex.torch[on ? 1 : 0]);
+        s.position.set((i % this.w) * TILE, Math.floor(i / this.w) * TILE);
+        s.scale.set(SCALE);
+        s.visible = false;
+        this.torchSprites.set(i, s);
+        this.markerLayer.addChild(s);
+      }
+      if (this.torches.get(i) !== on) {
+        this.torches.set(i, on);
+        s.texture = this.tex.torch[on ? 1 : 0];
+        this.lightDirty = true;
       }
     }
   }
@@ -503,7 +539,7 @@ export class GameView {
   private toggleLantern(): void {
     const me = this.avatars.get(this.you);
     if (!me) return;
-    if (me.panic) return;
+    if (me.panic || this.intro > 0) return;
     const on = !this.myLit;
     if (on && me.oil <= 0) return;
     this.myLit = on;
@@ -530,7 +566,7 @@ export class GameView {
 
   private handleInput(now: number): void {
     const me = this.avatars.get(this.you);
-    if (!me || me.ko > 0 || me.panic || now < this.readyAt || this.pending.length >= MAX_QUEUED_INTENTS) return;
+    if (!me || me.ko > 0 || me.panic || this.intro > 0 || now < this.readyAt || this.pending.length >= MAX_QUEUED_INTENTS) return;
 
     let action: Action | null = null;
     let costOf: Action | null = null;
@@ -592,6 +628,7 @@ export class GameView {
       if (lit) sources.push({ x: a.tx, y: a.ty, radius: LANTERN_RADIUS, strength: 1 });
     }
     for (const i of this.sunshafts) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: SUNSHAFT_RADIUS, strength: 1 });
+    for (const [i, on] of this.torches) if (on) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: TORCH_RADIUS, strength: 1 });
 
     // Sunbeams, traced locally like the server does. Critters standing in a beam block it.
     const occupied = new Set<number>();
@@ -613,6 +650,10 @@ export class GameView {
     this.drawBeams(beams);
     for (const [i, s] of this.mirrorSprites) {
       s.visible = this.tiles[i] !== UNKNOWN;
+      s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
+    }
+    for (const [i, s] of this.torchSprites) {
+      s.visible = this.tiles[i] !== UNKNOWN || this.torches.get(i) === true;
       s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
     }
     this.light = light;
@@ -763,13 +804,18 @@ export class GameView {
 
     this.drawGloom(now, dtMs);
 
+    // Camera: on you, except during a boss intro, when it glides over to watch the Gloom.
     const me = this.avatars.get(this.you);
-    if (me) {
-      this.world.position.set(
-        Math.round(this.app.screen.width / 2 - (me.dx * TILE + TILE / 2)),
-        Math.round(this.app.screen.height / 2 - (me.dy * TILE + TILE / 2)),
-      );
+    let tx = me ? me.dx * TILE + TILE / 2 : this.camX;
+    let ty = me ? me.dy * TILE + TILE / 2 : this.camY;
+    if (this.intro > 0 && this.gloom) {
+      tx = (this.gloom.sx + 1) * TILE;
+      ty = (this.gloom.sy + 1) * TILE;
     }
+    const glide = this.intro > 0 || Math.hypot(tx - this.camX, ty - this.camY) > TILE * 2 ? Math.min(1, dtMs / 250) : 1;
+    this.camX += (tx - this.camX) * glide;
+    this.camY += (ty - this.camY) * glide;
+    this.world.position.set(Math.round(this.app.screen.width / 2 - this.camX), Math.round(this.app.screen.height / 2 - this.camY));
     this.onDebug(`tick ${this.serverTick} · pending ${this.pending.length} · ${Math.round(this.app.ticker.FPS)} fps`);
   }
 
@@ -789,7 +835,17 @@ export class GameView {
     view.position.set(Math.round(cx), Math.round(cy));
     view.scale.set(1 + wobble * 0.04 + (g.pinned ? 0 : 0.04), 1 - wobble * 0.04);
     view.zIndex = g.sy + 1;
-    view.alpha = g.pinned ? 0.85 : 1;
+    // It's a creature of darkness: you only see it where light falls on it.
+    const light = this.light;
+    const litAt = (wx: number, wy: number) => {
+      if (!light) return false;
+      const x = Math.floor(wx / TILE);
+      const y = Math.floor(wy / TILE);
+      return x >= 0 && y >= 0 && x < this.w && y < this.h && light.level[y * this.w + x]! > 0;
+    };
+    const shown = gloomFootprint(this.w, g.x, g.y).some((i) => (light?.level[i] ?? 0) > 0);
+    const targetAlpha = shown ? (g.pinned ? 0.85 : 1) : 0;
+    view.alpha += (targetAlpha - view.alpha) * Math.min(1, dtMs / 120);
 
     const heart = this.hearts[0];
     if (!heart || g.pinned) return;
@@ -801,23 +857,40 @@ export class GameView {
     const bend = Math.sin(now / 700) * Math.min(40, len / 4);
     const qx = mx + (-(cy - hy) / len) * bend;
     const qy = my + ((cx - hx) / len) * bend;
+    const at = (p: number): [number, number] => {
+      const u = 1 - p;
+      return [u * u * hx + 2 * u * p * qx + p * p * cx, u * u * hy + 2 * u * p * qy + p * p * cy];
+    };
+    // Only the parts of the tether that light falls on are visible.
+    const SEGMENTS = 40;
     for (const [width, color, alpha] of [
       [14, 0x2b2040, 0.45],
       [5, 0x5a4880, 0.55],
     ] as const) {
-      t.moveTo(hx, hy);
-      t.quadraticCurveTo(qx, qy, cx, cy);
-      t.stroke({ color, width, alpha, cap: 'round' });
+      let drawing = false;
+      for (let n = 0; n <= SEGMENTS; n++) {
+        const [px, py] = at(n / SEGMENTS);
+        const lit = litAt(px, py);
+        if (lit && !drawing) {
+          t.moveTo(px, py);
+          drawing = true;
+        } else if (lit) {
+          t.lineTo(px, py);
+        } else if (drawing) {
+          t.stroke({ color, width, alpha, cap: 'round' });
+          drawing = false;
+        }
+      }
+      if (drawing) t.stroke({ color, width, alpha, cap: 'round' });
     }
     // Wisps of light flowing from the stone into the Gloom: faster the closer it is (it drains faster).
     const tiles = Math.max(0, len / TILE - 1.5);
     const speed = 350 + 1100 * Math.min(1, tiles / 12);
     for (let n = 0; n < 6; n++) {
       const p = (now / speed + n / 6) % 1;
-      const u = 1 - p;
-      const px = u * u * hx + 2 * u * p * qx + p * p * cx;
-      const py = u * u * hy + 2 * u * p * qy + p * p * cy;
-      t.circle(px, py, 1.5 + 4 * u).fill({ color: 0xfff0b0, alpha: 0.85 * u + 0.1 });
+      const [px, py] = at(p);
+      if (!litAt(px, py)) continue;
+      t.circle(px, py, 1.5 + 4 * (1 - p)).fill({ color: 0xfff0b0, alpha: 0.85 * (1 - p) + 0.1 });
     }
   }
 
@@ -843,6 +916,7 @@ export class GameView {
       open: this.open,
       gloom: this.gloom !== null,
       pinned: this.gloom?.pinned ?? false,
+      intro: this.intro > 0,
     });
   }
 }

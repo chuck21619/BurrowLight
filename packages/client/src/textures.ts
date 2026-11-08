@@ -16,6 +16,8 @@ export interface Textures {
   star: Texture;
   lantern: Texture;
   sunbeam: Texture;
+  /** index 0 = unlit, 1 = lit */
+  torch: [Texture, Texture];
   /** index 0 = "/", 1 = "\" */
   mirror: [Texture, Texture];
 }
@@ -116,6 +118,23 @@ export function makeTextures(renderer: Renderer): Textures {
   };
   const mirror: [Texture, Texture] = [bake((g) => mirrorPane(g, false)), bake((g) => mirrorPane(g, true))];
 
+  // A little standing torch: a wooden post and a metal bowl, with a flame when lit (drawn over the floor).
+  const torchBase = (g: Graphics) => {
+    px(g, 7, 7, 0x6e4520, 2, 8); // post
+    px(g, 5, 14, 0x6e4520, 6, 1); // foot
+    px(g, 4, 5, 0x5c5862, 8, 2); // bowl
+    px(g, 5, 7, 0x47434d, 6, 1);
+  };
+  const torch: [Texture, Texture] = [
+    bake((g) => torchBase(g)),
+    bake((g) => {
+      torchBase(g);
+      px(g, 6, 2, 0xffa040, 4, 3); // flame
+      px(g, 7, 1, 0xffd070, 2, 2);
+      px(g, 7, 3, 0xfff3b0, 2, 2);
+    }),
+  ];
+
   const star = bake((g) => {
     px(g, 7, 5, 0xffe066, 2, 6);
     px(g, 5, 7, 0xffe066, 6, 2);
@@ -146,5 +165,5 @@ export function makeTextures(renderer: Renderer): Textures {
     g.ellipse(8, 14, 6, 2).fill({ color: 0x000000, alpha: 0.3 });
   });
 
-  return { floor, wall, stairs, stairsClosed, sunshaft, heartstone, trap, critter, shadow, star, lantern, sunbeam, mirror };
+  return { floor, wall, stairs, stairsClosed, sunshaft, heartstone, trap, critter, shadow, star, lantern, sunbeam, mirror, torch };
 }

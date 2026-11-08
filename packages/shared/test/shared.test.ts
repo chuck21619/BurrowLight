@@ -15,6 +15,7 @@ import {
   computeLight,
   setLantern,
   MAX_OIL,
+  inIntro,
   gloomFootprint,
   GREAT_HEART_FULL,
   GLOOM_DRAIN_NEAR,
@@ -76,7 +77,7 @@ function asciiMap(rows: string[]): FloorMap {
   const w = rows[0]!.length;
   const tiles = new Uint8Array(w * h);
   rows.forEach((r, y) => [...r].forEach((c, x) => (tiles[y * w + x] = c === '#' ? Tile.Wall : Tile.Floor)));
-  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [], emitters: [], mirrors: [] };
+  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [], emitters: [], mirrors: [], torches: [] };
 }
 
 describe('field of view', () => {
@@ -506,11 +507,16 @@ describe('sunbeams and mirrors', () => {
 });
 
 describe('the Gloom', () => {
-  const bossGame = (seed = 3) =>
-    createGame(seed, [
+  /** A boss floor with the intro skipped and its torches out (most tests want a quiet room). */
+  const bossGame = (seed = 3) => {
+    const game = createGame(seed, [
       { id: 'a', name: 'A', color: 1 },
       { id: 'b', name: 'B', color: 2 },
     ], 3);
+    game.introUntil = 0;
+    for (const k of game.torches.keys()) game.torches.set(k, false);
+    return game;
+  };
   const foot = (game: ReturnType<typeof bossGame>) => gloomFootprint(game.map.w, game.gloom!.x, game.gloom!.y);
   const run = (game: ReturnType<typeof bossGame>, ticks: number) => {
     for (let i = 0; i < ticks; i++) step(game);
@@ -712,5 +718,107 @@ describe('the Gloom', () => {
     run(game, 3);
     expect(game.exitOpen).toBe(true);
     expect(game.gloom).toBeNull();
+  });
+});
+
+describe('torches', () => {
+  it('normal floors have a few unlit torches; a lit lantern carried over one lights it, an unlit one does not', () => {
+    let floorsWithTorches = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }]);
+      if (game.torches.size === 0) continue;
+      floorsWithTorches++;
+      expect([...game.torches.values()].every((on) => !on)).toBe(true);
+    }
+    expect(floorsWithTorches).toBeGreaterThan(30);
+
+    const game = createGame(2, [{ id: 'a', name: 'A', color: 1 }]);
+    const [t] = [...game.torches.keys()];
+    const a = game.players.get('a')!;
+    a.x = t! % game.map.w;
+    a.y = Math.floor(t! / game.map.w);
+    step(game);
+    expect(game.torches.get(t!)).toBe(false);
+    setLantern(game, 'a', true);
+    step(game);
+    expect(game.torches.get(t!)).toBe(true);
+    // A lit torch is light: it keeps shining after the lantern goes out, and burns no oil.
+    setLantern(game, 'a', false);
+    const oil = a.oil;
+    step(game);
+    expect(game.light.level[t!]).toBeGreaterThan(0);
+    expect(a.oil).toBe(oil);
+  });
+
+  it('boss rooms start with their torches lit, and the Gloom eats one in its intro while nobody can act', () => {
+    const game = createGame(4, [{ id: 'a', name: 'A', color: 1 }], 3);
+    expect([...game.torches.values()].every((on) => on)).toBe(true);
+    expect(game.introUntil).toBeGreaterThan(game.tick);
+    queueIntent(game, 'a', 1, { kind: 'wait' });
+    expect(game.players.get('a')!.queue.length).toBe(0); // input is dropped during the intro
+    setLantern(game, 'a', true);
+    expect(game.players.get('a')!.lit).toBe(false);
+    for (let i = 0; i < 200 && inIntro(game); i++) step(game);
+    expect(game.torches.get(game.introTorch)).toBe(false); // it ate the intro torch
+    expect(inIntro(game)).toBe(false);
+    queueIntent(game, 'a', 2, { kind: 'wait' });
+    expect(game.players.get('a')!.queue.length).toBe(1);
+  });
+
+  it('the Gloom goes after a lit torch and eats it', () => {
+    const game = createGame(5, [{ id: 'a', name: 'A', color: 1 }], 3);
+    game.introUntil = 0;
+    game.map.emitters = [];
+    game.mirrors.clear();
+    const g = game.gloom!;
+    // Leave only the torch nearest to the Gloom lit.
+    let nearest = -1;
+    let best = Infinity;
+    for (const k of game.torches.keys()) {
+      const d = Math.abs((k % game.map.w) - g.x) + Math.abs(Math.floor(k / game.map.w) - g.y);
+      if (d < best) {
+        best = d;
+        nearest = k;
+      }
+    }
+    for (const k of game.torches.keys()) game.torches.set(k, k === nearest);
+    for (let i = 0; i < 120 && game.torches.get(nearest); i++) step(game);
+    expect(game.torches.get(nearest)).toBe(false);
+  });
+});
+
+describe('the Gloom loses interest', () => {
+  it('pinned while chasing a critter, it ignores that critter for a while', () => {
+    const game = createGame(3, [
+      { id: 'a', name: 'A', color: 1 },
+      { id: 'b', name: 'B', color: 2 },
+    ], 3);
+    game.introUntil = 0;
+    for (const k of game.torches.keys()) game.torches.set(k, false);
+    game.map.emitters = [];
+    game.mirrors.clear();
+    const g = game.gloom!;
+    game.players.delete('b'); // keep the test beam's row clear of other critters
+    const a = game.players.get('a')!;
+    a.x = g.x + 3;
+    a.y = g.y;
+    game.map.tiles[a.y * game.map.w + a.x] = Tile.Floor;
+    setLantern(game, 'a', true);
+    g.nextStepAt = 0;
+    step(game);
+    expect(game.gloom!.target).toBe('a');
+    // Swing a beam onto it: it's pinned while chasing A.
+    game.map.emitters = [{ x: 1, y: game.gloom!.y, dx: 1, dy: 0 }];
+    for (let x = 1; x < game.gloom!.x; x++) game.map.tiles[game.gloom!.y * game.map.w + x] = Tile.Floor;
+    step(game);
+    step(game);
+    expect(game.gloom!.pinned).toBe(true);
+    expect((game.gloom!.ignore.get('a') ?? 0)).toBeGreaterThan(game.tick);
+    // Freed again, it no longer goes for A's lantern.
+    game.map.emitters = [];
+    game.gloom!.nextStepAt = 0;
+    step(game);
+    step(game);
+    expect(game.gloom!.target).not.toBe('a');
   });
 });

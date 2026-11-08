@@ -15,6 +15,7 @@ import {
   packMirrors,
   packEmitters,
   packGloom,
+  packTorches,
   step,
   type Action,
   type GameState,
@@ -179,6 +180,8 @@ export class Room {
         runOver: game.runOver,
         mirrors,
         gloom: packGloom(game),
+        torches: packTorches(game),
+        intro: Math.max(0, game.introUntil - game.tick),
       });
     }
   }
@@ -234,6 +237,8 @@ export class Room {
       mirrors: packMirrors(game),
       heartMax: game.hearts.map((h) => h.max),
       gloom: packGloom(game),
+      torches: packTorches(game),
+      intro: Math.max(0, game.introUntil - game.tick),
     });
   }
 

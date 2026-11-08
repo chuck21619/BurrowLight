@@ -215,8 +215,10 @@ $('again').addEventListener('click', () => {
 });
 
 let floorText = '';
-game.onObjective = ({ charged, total, open, gloom, pinned }) => {
-  const goal = open
+game.onObjective = ({ charged, total, open, gloom, pinned, intro }) => {
+  const goal = intro
+    ? 'Something in the dark is hungry for light...'
+    : open
     ? 'The hatch is open! Everyone gather on the ladder.'
     : gloom
       ? pinned

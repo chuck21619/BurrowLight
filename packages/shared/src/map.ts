@@ -41,8 +41,12 @@ export interface FloorMap {
   emitters: Emitter[];
   /** Rotatable mirrors on floor tiles, with their starting (scrambled) orientation. */
   mirrors: { x: number; y: number; orient: MirrorOrient }[];
+  /** Torches on floor tiles: lit by walking over them with a lit lantern; no oil; the Gloom eats them. */
+  torches: { x: number; y: number; lit: boolean }[];
   /** Boss rooms: where the Gloom (2×2, top-left corner) starts; its one Heartstone is a Great Heartstone. */
   gloomStart?: Point;
+  /** Boss rooms: the lit torch the Gloom eats in its introduction. */
+  introTorch?: Point;
 }
 
 export const isWalkable = (t: number): boolean =>
@@ -189,6 +193,7 @@ function tryGenerate(rng: Rng, roomCount: number): FloorMap | null {
     traps: [],
     emitters: [],
     mirrors: [],
+    torches: [],
   };
 }
 
@@ -260,6 +265,24 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
   // No beam may start out already lighting a Heartstone: re-scramble the mirrors until none does.
   if (map.emitters.length && !scrambleUntilUnsolved(rng, map)) return false;
 
+  // A few unlit torches: free light for whoever carries a flame over them. Never close enough to a
+  // Heartstone to charge it, and not right at the start.
+  const torchSpots: Point[] = [];
+  for (const r of map.rooms)
+    for (let y = r.y; y < r.y + r.h; y++)
+      for (let x = r.x; x < r.x + r.w; x++) {
+        const p = { x, y };
+        if (tiles[y * w + x] !== Tile.Floor || used.has(y * w + x)) continue;
+        if (cheb(p, map.entrance) < 3 || map.hearts.some((hp) => cheb(p, hp) <= TORCH_RADIUS_FOR_GEN + 1)) continue;
+        torchSpots.push(p);
+      }
+  for (let k = Math.min(rng.int(1, 3), torchSpots.length); k > 0; k--) {
+    const t = torchSpots.splice(rng.int(0, torchSpots.length - 1), 1)[0]!;
+    if (map.torches.some((o) => cheb(o, t) < 4)) continue;
+    map.torches.push({ ...t, lit: false });
+    used.add(t.y * w + t.x);
+  }
+
   // Hidden traps: never near the entrance, next to a Heartstone, or on special tiles.
   for (let i = 0; i < tiles.length; i++) {
     if (tiles[i] !== Tile.Floor || used.has(i)) continue;
@@ -270,6 +293,9 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
   }
   return true;
 }
+
+/** Matches TORCH_RADIUS in rules (kept here to avoid an import cycle). */
+const TORCH_RADIUS_FOR_GEN = 3;
 
 const BEAM_PUZZLE_CHANCE = 0.75;
 const DIR4: [number, number][] = [
@@ -510,6 +536,31 @@ function tryBossRoom(rng: Rng): FloorMap | null {
         starts.push({ x, y });
     }
   if (!starts.length) return null;
+  const gloomStart = rng.pick(starts);
+  const gloomFoot = new Set([0, 1].flatMap((dy) => [0, 1].map((dx) => (gloomStart.y + dy) * w + gloomStart.x + dx)));
+
+  // Lit torches around the room. One sits a few steps from the Gloom: it eats that one in its intro.
+  const torchOk = (p: Point) =>
+    tiles[p.y * w + p.x] === Tile.Floor && !reserved.has(p.y * w + p.x) && !lit.has(p.y * w + p.x) && !gloomFoot.has(p.y * w + p.x);
+  const intro: Point[] = [];
+  for (let y = gloomStart.y - 4; y <= gloomStart.y + 5; y++)
+    for (let x = gloomStart.x - 4; x <= gloomStart.x + 5; x++) {
+      const p = { x, y };
+      if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1 || !torchOk(p)) continue;
+      const d = Math.max(Math.abs(x - (gloomStart.x + 0.5)), Math.abs(y - (gloomStart.y + 0.5)));
+      if (d >= 2.5 && d <= 4.5 && cheb(p, heart) > TORCH_RADIUS_FOR_GEN + 1) intro.push(p);
+    }
+  if (!intro.length) return null;
+  const introTorch = rng.pick(intro);
+  const torches = [{ ...introTorch, lit: true }];
+  reserved.add(introTorch.y * w + introTorch.x);
+  for (let tries = 0; tries < 60 && torches.length < 5; tries++) {
+    const p = { x: rng.int(2, w - 3), y: rng.int(1, h - 2) };
+    if (!torchOk(p) || cheb(p, heart) <= TORCH_RADIUS_FOR_GEN + 1 || cheb(p, entrance) < 3) continue;
+    if (torches.some((t) => cheb(t, p) < 4)) continue;
+    torches.push({ ...p, lit: true });
+    reserved.add(p.y * w + p.x);
+  }
 
   return {
     w,
@@ -523,7 +574,9 @@ function tryBossRoom(rng: Rng): FloorMap | null {
     traps: [],
     emitters,
     mirrors,
-    gloomStart: rng.pick(starts),
+    torches,
+    gloomStart,
+    introTorch,
   };
 }
 
