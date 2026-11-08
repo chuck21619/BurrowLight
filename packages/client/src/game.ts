@@ -37,6 +37,8 @@ const UNKNOWN = -1;
 const MEMORY_TINT = 0x231e31;
 const DIAGONAL_GRACE_MS = 40;
 const SHARE_SPREAD_PX = 20;
+/** In the dark, another critter shows (as an outline) only within this many tiles of you. */
+const SEE_FRIEND_IN_DARK = 2;
 const LABEL_STACK_PX = 15;
 /** After you toggle your lantern, trust your own toggle over the server for this long. */
 const LANTERN_PREDICT_MS = 400;
@@ -60,6 +62,9 @@ interface Avatar {
   panic: boolean;
   root: Container;
   body: Sprite;
+  /** Silhouette edge shown instead of the body when the critter stands in the dark. */
+  outline: Sprite;
+  shadow: Sprite;
   label: Text;
   stars: Container;
   lamp: Sprite;
@@ -703,6 +708,12 @@ export class GameView {
     body.anchor.set(0.5);
     body.scale.set(SCALE);
     body.tint = info.color;
+    const outline = new Sprite(this.tex.critterOutline);
+    outline.anchor.set(0.5);
+    outline.scale.set(SCALE);
+    outline.tint = info.color;
+    outline.alpha = 0.85;
+    outline.visible = false;
     const lamp = new Sprite(this.tex.lantern);
     lamp.anchor.set(0.5);
     lamp.scale.set(2);
@@ -728,7 +739,7 @@ export class GameView {
     });
     label.anchor.set(0.5, 1);
     label.position.set(0, -TILE * 0.5);
-    root.addChild(shadow, body, lamp, stars, label);
+    root.addChild(shadow, body, outline, lamp, stars, label);
     this.entityLayer.addChild(root);
     this.avatars.set(info.id, {
       info,
@@ -745,6 +756,8 @@ export class GameView {
       panic: false,
       root,
       body,
+      outline,
+      shadow,
       label,
       stars,
       lamp,
@@ -792,7 +805,10 @@ export class GameView {
       a.root.position.set(Math.round(a.dx * TILE + TILE / 2 + a.ox + shake), Math.round(a.dy * TILE + TILE / 2 - hop * 6));
       a.body.scale.set(SCALE * (1 + hop * 0.06), SCALE * (1 - hop * 0.06));
       a.body.rotation = a.ko > 0 ? 0.25 * Math.sin(now / 150) : 0;
+      a.outline.scale.copyFrom(a.body.scale);
+      a.outline.rotation = a.body.rotation;
       a.root.zIndex = a.dy;
+      this.applyDarkness(a);
       if (a.ko > 0) {
         // Stars circle the dazed critter's head.
         a.stars.children.forEach((st, k) => {
@@ -817,6 +833,25 @@ export class GameView {
     this.camY += (ty - this.camY) * glide;
     this.world.position.set(Math.round(this.app.screen.width / 2 - this.camX), Math.round(this.app.screen.height / 2 - this.camY));
     this.onDebug(`tick ${this.serverTick} · pending ${this.pending.length} · ${Math.round(this.app.ticker.FPS)} fps`);
+  }
+
+  /**
+   * Critters are hidden by the dark too. In light: drawn normally. In the dark: your own critter is
+   * just an outline (plus its daze stars); a friend shows as an outline only when within a couple of
+   * tiles of you, and otherwise can't be seen at all.
+   */
+  private applyDarkness(a: Avatar): void {
+    const me = this.avatars.get(this.you);
+    const self = a === me;
+    const inLight = (this.light?.level[a.ty * this.w + a.tx] ?? 0) > 0;
+    const close = !!me && Math.max(Math.abs(a.tx - me.tx), Math.abs(a.ty - me.ty)) <= SEE_FRIEND_IN_DARK;
+    const mode = inLight ? 'full' : self || close ? 'outline' : 'hidden';
+    a.root.visible = mode !== 'hidden';
+    a.body.visible = mode === 'full';
+    a.shadow.visible = mode === 'full';
+    a.outline.visible = mode === 'outline';
+    a.label.visible = mode === 'full';
+    a.stars.visible = a.ko > 0 && (mode === 'full' || self);
   }
 
   /** The Gloom slides between tiles and wobbles; while free, a smoky tether carries light away from the Great Heartstone. */

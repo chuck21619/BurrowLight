@@ -12,6 +12,8 @@ export interface Textures {
   heartstone: Texture;
   trap: Texture;
   critter: Texture;
+  /** Just the edge of the critter's silhouette, for when it's in the dark. White, so it can be tinted. */
+  critterOutline: Texture;
   shadow: Texture;
   star: Texture;
   lantern: Texture;
@@ -161,9 +163,42 @@ export function makeTextures(renderer: Renderer): Textures {
     px(g, 11, 10, 0xffc4b0, 1, 1);
   });
 
+  // The critter silhouette as a pixel mask (ears + rounded body), then only its edge pixels.
+  const mask = (x: number, y: number): boolean => {
+    if ((x === 4 || x === 5 || x === 10 || x === 11) && y >= 2 && y <= 5) return true; // ears
+    if (x < 3 || x > 12 || y < 5 || y > 13) return false;
+    const cornerX = x < 5 ? 5 - x : x > 10 ? x - 10 : 0;
+    const cornerY = y < 7 ? 7 - y : y > 11 ? y - 11 : 0;
+    return cornerX + cornerY <= 2; // trims the corners to match the rounded body
+  };
+  const critterOutline = bake((g) => {
+    for (let y = 0; y < SRC; y++)
+      for (let x = 0; x < SRC; x++) {
+        if (!mask(x, y)) continue;
+        const edge = !mask(x - 1, y) || !mask(x + 1, y) || !mask(x, y - 1) || !mask(x, y + 1);
+        if (edge) px(g, x, y, 0xffffff);
+      }
+  });
+
   const shadow = bake((g) => {
     g.ellipse(8, 14, 6, 2).fill({ color: 0x000000, alpha: 0.3 });
   });
 
-  return { floor, wall, stairs, stairsClosed, sunshaft, heartstone, trap, critter, shadow, star, lantern, sunbeam, mirror, torch };
+  return {
+    floor,
+    wall,
+    stairs,
+    stairsClosed,
+    sunshaft,
+    heartstone,
+    trap,
+    critter,
+    critterOutline,
+    shadow,
+    star,
+    lantern,
+    sunbeam,
+    mirror,
+    torch,
+  };
 }

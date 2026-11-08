@@ -539,7 +539,8 @@ function tryBossRoom(rng: Rng): FloorMap | null {
   const gloomStart = rng.pick(starts);
   const gloomFoot = new Set([0, 1].flatMap((dy) => [0, 1].map((dx) => (gloomStart.y + dy) * w + gloomStart.x + dx)));
 
-  // Lit torches around the room. One sits a few steps from the Gloom: it eats that one in its intro.
+  // Torches around the room, all unlit except one a few steps from the Gloom: it eats that one in
+  // its intro, so the fight starts in darkness and the party has to light the rest.
   const torchOk = (p: Point) =>
     tiles[p.y * w + p.x] === Tile.Floor && !reserved.has(p.y * w + p.x) && !lit.has(p.y * w + p.x) && !gloomFoot.has(p.y * w + p.x);
   const intro: Point[] = [];
@@ -558,7 +559,7 @@ function tryBossRoom(rng: Rng): FloorMap | null {
     const p = { x: rng.int(2, w - 3), y: rng.int(1, h - 2) };
     if (!torchOk(p) || cheb(p, heart) <= TORCH_RADIUS_FOR_GEN + 1 || cheb(p, entrance) < 3) continue;
     if (torches.some((t) => cheb(t, p) < 4)) continue;
-    torches.push({ ...p, lit: true });
+    torches.push({ ...p, lit: false });
     reserved.add(p.y * w + p.x);
   }
 

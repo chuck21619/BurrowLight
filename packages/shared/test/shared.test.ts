@@ -750,9 +750,10 @@ describe('torches', () => {
     expect(a.oil).toBe(oil);
   });
 
-  it('boss rooms start with their torches lit, and the Gloom eats one in its intro while nobody can act', () => {
+  it('boss rooms start with only the intro torch lit; the Gloom eats it while nobody can act, so the fight starts dark', () => {
     const game = createGame(4, [{ id: 'a', name: 'A', color: 1 }], 3);
-    expect([...game.torches.values()].every((on) => on)).toBe(true);
+    expect([...game.torches.entries()].filter(([, on]) => on).map(([k]) => k)).toEqual([game.introTorch]);
+    expect(game.torches.size).toBeGreaterThan(1);
     expect(game.introUntil).toBeGreaterThan(game.tick);
     queueIntent(game, 'a', 1, { kind: 'wait' });
     expect(game.players.get('a')!.queue.length).toBe(0); // input is dropped during the intro
@@ -760,6 +761,7 @@ describe('torches', () => {
     expect(game.players.get('a')!.lit).toBe(false);
     for (let i = 0; i < 200 && inIntro(game); i++) step(game);
     expect(game.torches.get(game.introTorch)).toBe(false); // it ate the intro torch
+    expect([...game.torches.values()].some((on) => on)).toBe(false); // the fight starts with none lit
     expect(inIntro(game)).toBe(false);
     queueIntent(game, 'a', 2, { kind: 'wait' });
     expect(game.players.get('a')!.queue.length).toBe(1);
