@@ -8,6 +8,7 @@ export const ActionCost = {
   moveDiagonal: 3,
   wait: 1,
   blockedMove: 1,
+  rotate: 2,
 } as const;
 
 export const BASE_SPEED = 100;
@@ -15,6 +16,8 @@ export const BASE_SPEED = 100;
 // ---- Light prototype tuning (all in ticks; 10 ticks = 1 second) ----
 export const LANTERN_RADIUS = 4;
 export const SUNSHAFT_RADIUS = 3;
+/** A focused sunbeam is strong enough to charge a Heartstone on its own. */
+export const BEAM_STRENGTH = 2;
 /** Oil at the start of a run: 900 ticks = 90 seconds of lantern light (floors are small now). */
 export const START_OIL = 900;
 export const OIL_PER_TICK = 1;
@@ -54,12 +57,13 @@ export const DIRS = {
 export type Dir = keyof typeof DIRS;
 export const isDir = (d: unknown): d is Dir => typeof d === 'string' && Object.hasOwn(DIRS, d);
 
-export type Action = { kind: 'move'; dir: Dir } | { kind: 'wait' };
+/** `rotate` turns the mirror you're standing on. */
+export type Action = { kind: 'move'; dir: Dir } | { kind: 'wait' } | { kind: 'rotate' };
 
 export function isAction(a: unknown): a is Action {
   if (typeof a !== 'object' || a === null) return false;
   const o = a as { kind?: unknown; dir?: unknown };
-  return o.kind === 'wait' || (o.kind === 'move' && isDir(o.dir));
+  return o.kind === 'wait' || o.kind === 'rotate' || (o.kind === 'move' && isDir(o.dir));
 }
 
 /** cost = base x 100 / speed, rounded up, minimum 1 tick. */
@@ -69,6 +73,7 @@ export const isDiagonal = (dir: Dir): boolean => dir.length === 2;
 
 export function actionCost(action: Action, speed = BASE_SPEED): number {
   if (action.kind === 'wait') return scaledCost(ActionCost.wait, speed);
+  if (action.kind === 'rotate') return scaledCost(ActionCost.rotate, speed);
   return scaledCost(isDiagonal(action.dir) ? ActionCost.moveDiagonal : ActionCost.moveCardinal, speed);
 }
 

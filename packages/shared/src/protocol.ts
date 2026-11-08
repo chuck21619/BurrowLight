@@ -65,6 +65,10 @@ export type ServerMessage =
       traps: number[];
       open: boolean;
       runOver: boolean;
+      /** Flat [index, dx, dy, ...] of every sunbeam emitter (drawn once its tile is seen). */
+      emitters: number[];
+      /** Flat [index, orientation, ...] of every mirror (drawn once its tile is seen). */
+      mirrors: number[];
     }
   | {
       t: 'tick';
@@ -80,6 +84,7 @@ export type ServerMessage =
       open: boolean;
       /** Everyone panicked at once: the run is over. */
       runOver: boolean;
+      mirrors: number[];
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

@@ -15,6 +15,9 @@ export interface Textures {
   shadow: Texture;
   star: Texture;
   lantern: Texture;
+  sunbeam: Texture;
+  /** index 0 = "/", 1 = "\" */
+  mirror: [Texture, Texture];
 }
 
 /** Placeholder pixel art drawn in code until the CC0 tileset goes in (M5). */
@@ -93,6 +96,26 @@ export function makeTextures(renderer: Renderer): Textures {
     px(g, 7, 7, 0xe07a5f, 2, 2); // trigger
   });
 
+  const sunbeam = bake((g) => {
+    floorBase(g);
+    g.circle(8, 8, 5).fill(0xf6dc8a);
+    g.circle(8, 8, 3).fill(0xfff6d0);
+    for (const [x, y] of [[8, 1], [8, 14], [1, 8], [14, 8]] as const) px(g, x, y, 0xf6dc8a);
+  });
+
+  // Mirrors: a silver pane on a little wooden stand, drawn over the floor tile.
+  const mirrorPane = (g: Graphics, flip: boolean) => {
+    px(g, 3, 13, 0x8b6a4a, 10, 2); // stand
+    for (let k = 0; k < 10; k++) {
+      const x = 3 + k;
+      const y = flip ? 3 + k : 12 - k;
+      px(g, x, y, 0x55606b, 1, 1); // frame edge
+      px(g, x, y - 1, 0xdfe8f0, 1, 1); // glass
+      px(g, x, y - 2, 0xb8c7d4, 1, 1);
+    }
+  };
+  const mirror: [Texture, Texture] = [bake((g) => mirrorPane(g, false)), bake((g) => mirrorPane(g, true))];
+
   const star = bake((g) => {
     px(g, 7, 5, 0xffe066, 2, 6);
     px(g, 5, 7, 0xffe066, 6, 2);
@@ -123,5 +146,5 @@ export function makeTextures(renderer: Renderer): Textures {
     g.ellipse(8, 14, 6, 2).fill({ color: 0x000000, alpha: 0.3 });
   });
 
-  return { floor, wall, stairs, stairsClosed, sunshaft, heartstone, trap, critter, shadow, star, lantern };
+  return { floor, wall, stairs, stairsClosed, sunshaft, heartstone, trap, critter, shadow, star, lantern, sunbeam, mirror };
 }

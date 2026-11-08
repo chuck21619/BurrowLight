@@ -1,3 +1,4 @@
+import { reflect, traceBeam, type BeamCell, type Emitter, type MirrorOrient } from './beam';
 import { createRng, hashSeed, type Rng } from './rng';
 
 export const Tile = {
@@ -8,6 +9,8 @@ export const Tile = {
   Sunshaft: 3,
   /** A pedestal you can't stand on; doesn't block light. */
   Heartstone: 4,
+  /** Walkable floor where a crack of sunlight shines one straight beam. */
+  Sunbeam: 5,
 } as const;
 export type TileType = (typeof Tile)[keyof typeof Tile];
 
@@ -34,10 +37,16 @@ export interface FloorMap {
   hearts: Point[];
   /** Hidden booby trap tile indices. Server-only: never sent until revealed. */
   traps: number[];
+  /** Sunbeam emitters (on Tile.Sunbeam tiles). */
+  emitters: Emitter[];
+  /** Rotatable mirrors on floor tiles, with their starting (scrambled) orientation. */
+  mirrors: { x: number; y: number; orient: MirrorOrient }[];
 }
 
-export const isWalkable = (t: number): boolean => t === Tile.Floor || t === Tile.StairsDown || t === Tile.Sunshaft;
+export const isWalkable = (t: number): boolean =>
+  t === Tile.Floor || t === Tile.StairsDown || t === Tile.Sunshaft || t === Tile.Sunbeam;
 export const blocksSight = (t: number): boolean => t === Tile.Wall;
+export const beamCellOf = (t: number): BeamCell => (t === Tile.Wall ? 'wall' : t === Tile.Heartstone ? 'absorb' : 'open');
 
 export function tileAt(map: FloorMap, x: number, y: number): number {
   if (x < 0 || y < 0 || x >= map.w || y >= map.h) return Tile.Wall;
@@ -166,7 +175,19 @@ function tryGenerate(rng: Rng, roomCount: number): FloorMap | null {
   }
   if (far < 4) return null;
   cropped[stairs.y * w + stairs.x] = Tile.StairsDown;
-  return { w, h, tiles: cropped, rooms: shifted, entrance, stairs, sunshafts: [], hearts: [], traps: [] };
+  return {
+    w,
+    h,
+    tiles: cropped,
+    rooms: shifted,
+    entrance,
+    stairs,
+    sunshafts: [],
+    hearts: [],
+    traps: [],
+    emitters: [],
+    mirrors: [],
+  };
 }
 
 const TRAP_CHANCE_ROOM = 0.04;
@@ -206,21 +227,25 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
     map.rooms.filter((r) => r !== entranceRoom && r !== stairsRoom),
   );
   const order = [...others, ...map.rooms.filter((r) => r === stairsRoom && r !== entranceRoom), entranceRoom];
+  /** Tiles a puzzle uses (beam path, mirrors, emitters): no traps or other features go here. */
+  const used = new Set<number>();
   for (let k = 0; k < heartCount; k++) {
     // Spread across rooms; when there are more Heartstones than rooms, rooms take several.
     const room = order[k % order.length]!;
-    const spots = interior(room).filter((p) => map.hearts.every((hp) => cheb(hp, p) >= 3));
+    const spots = interior(room).filter((p) => !used.has(idx(p)) && map.hearts.every((hp) => cheb(hp, p) >= 3));
     if (spots.length === 0) return false;
     const heart = rng.pick(spots);
     tiles[idx(heart)] = Tile.Heartstone;
     map.hearts.push(heart);
-    // Half the time, a sunshaft near the Heartstone offers a cheaper solution (one lantern + sunlight).
+    // Most Heartstones get a sunbeam puzzle: free light, if the party sets the mirrors right.
+    if (rng.chance(BEAM_PUZZLE_CHANCE) && buildBeamPuzzle(rng, map, heart, used)) continue;
+    // Otherwise, half the time, a sunshaft near the Heartstone offers a cheaper solution (one lantern + sunlight).
     if (rng.chance(0.5)) {
       const near: Point[] = [];
       for (let y = room.y; y < room.y + room.h; y++)
         for (let x = room.x; x < room.x + room.w; x++) {
           const d = cheb({ x, y }, heart);
-          if (d >= 2 && d <= 3 && tiles[y * w + x] === Tile.Floor) near.push({ x, y });
+          if (d >= 2 && d <= 3 && tiles[y * w + x] === Tile.Floor && !used.has(y * w + x)) near.push({ x, y });
         }
       if (near.length) {
         const s = rng.pick(near);
@@ -230,15 +255,131 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
     }
   }
 
+  // No beam may start out already lighting a Heartstone: re-scramble the mirrors until none does.
+  if (map.emitters.length && !scrambleUntilUnsolved(rng, map)) return false;
+
   // Hidden traps: never near the entrance, next to a Heartstone, or on special tiles.
   for (let i = 0; i < tiles.length; i++) {
-    if (tiles[i] !== Tile.Floor) continue;
+    if (tiles[i] !== Tile.Floor || used.has(i)) continue;
     const p = { x: i % w, y: Math.floor(i / w) };
     if (cheb(p, map.entrance) <= SAFE_START_RADIUS) continue;
     if (map.hearts.some((hp) => cheb(p, hp) <= 1)) continue;
     if (rng.chance(roomOf(p) ? TRAP_CHANCE_ROOM : TRAP_CHANCE_CORRIDOR)) map.traps.push(i);
   }
   return true;
+}
+
+const BEAM_PUZZLE_CHANCE = 0.75;
+const DIR4: [number, number][] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/**
+ * Build a sunbeam puzzle for a Heartstone, working backwards: walk out from the Heartstone in a
+ * straight line, turn at 1–2 mirrors, and end at a wall where the sunlight comes in. Then check
+ * the beam really reaches the Heartstone with the mirrors set right, and scramble them so the
+ * party has to fix at least one. Sometimes adds a decoy mirror nearby.
+ */
+function buildBeamPuzzle(rng: Rng, map: FloorMap, heart: Point, used: Set<number>): boolean {
+  const { w, h, tiles } = map;
+  const free = (x: number, y: number) =>
+    x > 0 && y > 0 && x < w - 1 && y < h - 1 && tiles[y * w + x] === Tile.Floor && !used.has(y * w + x) &&
+    Math.max(Math.abs(x - map.entrance.x), Math.abs(y - map.entrance.y)) > 1;
+  const run = (x: number, y: number, dx: number, dy: number) => {
+    let n = 0;
+    while (free(x + dx * (n + 1), y + dy * (n + 1))) n++;
+    return n;
+  };
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const turns = rng.int(1, 2);
+    let x = heart.x;
+    let y = heart.y;
+    let [dx, dy] = rng.pick(DIR4);
+    const path: number[] = [];
+    const mirrors: { x: number; y: number; orient: MirrorOrient }[] = [];
+    let emitter: Emitter | null = null;
+    let ok = true;
+    for (let t = 0; t <= turns && ok; t++) {
+      const max = run(x, y, dx, dy);
+      if (max < 2) {
+        ok = false;
+        break;
+      }
+      const len = t < turns ? rng.int(2, max) : max;
+      for (let s = 1; s <= len; s++) path.push((y + dy * s) * w + x + dx * s);
+      x += dx * len;
+      y += dy * len;
+      if (t < turns) {
+        // Turn here at a mirror. The real beam arrives travelling (-ndx,-ndy) and must leave as (-dx,-dy).
+        const turnsHere = DIR4.filter(([a, b]) => a !== dx && a !== -dx && b !== dy && b !== -dy).filter(
+          ([a, b]) => run(x, y, a, b) >= 2,
+        );
+        if (!turnsHere.length) {
+          ok = false;
+          break;
+        }
+        const [ndx, ndy] = rng.pick(turnsHere);
+        const orient = ([0, 1] as MirrorOrient[]).find((o) => {
+          const [rx, ry] = reflect(-ndx, -ndy, o);
+          return rx === -dx && ry === -dy;
+        })!;
+        mirrors.push({ x, y, orient });
+        [dx, dy] = [ndx, ndy];
+      } else {
+        // The last tile before the wall is where the sunlight comes in, shining back toward the mirror.
+        emitter = { x, y, dx: -dx, dy: -dy };
+      }
+    }
+    if (!ok || !emitter || new Set(path).size !== path.length) continue;
+
+    // Check it: with the right settings the beam must end in this Heartstone.
+    const correct = new Map(mirrors.map((m) => [m.y * w + m.x, m.orient]));
+    const cell = (cx: number, cy: number) => beamCellOf(cx === emitter!.x && cy === emitter!.y ? Tile.Sunbeam : tiles[cy * w + cx]!);
+    const beam = traceBeam(w, h, cell, emitter, (i) => correct.get(i), () => false);
+    if (beam[beam.length - 1] !== heart.y * w + heart.x) continue;
+
+    // Scramble: random settings, but never already solved.
+    const start = mirrors.map((m) => ({ ...m, orient: rng.int(0, 1) as MirrorOrient }));
+    if (start.every((m, k) => m.orient === mirrors[k]!.orient)) start[0]!.orient = (1 - start[0]!.orient) as MirrorOrient;
+
+    tiles[emitter.y * w + emitter.x] = Tile.Sunbeam;
+    map.emitters.push(emitter);
+    map.mirrors.push(...start);
+    for (const i of path) used.add(i);
+    for (const i of beam) used.add(i);
+
+    // A decoy mirror off the path gives the room a second thing to think about (or another route).
+    if (rng.chance(0.5)) {
+      const options: Point[] = [];
+      for (let yy = 1; yy < h - 1; yy++)
+        for (let xx = 1; xx < w - 1; xx++)
+          if (free(xx, yy) && Math.max(Math.abs(xx - heart.x), Math.abs(yy - heart.y)) <= 4) options.push({ x: xx, y: yy });
+      if (options.length) {
+        const d = rng.pick(options);
+        map.mirrors.push({ ...d, orient: rng.int(0, 1) as MirrorOrient });
+        used.add(d.y * w + d.x);
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function scrambleUntilUnsolved(rng: Rng, map: FloorMap): boolean {
+  const { w, h, tiles } = map;
+  const hearts = new Set(map.hearts.map((p) => p.y * w + p.x));
+  const cell = (x: number, y: number) => beamCellOf(tiles[y * w + x]!);
+  for (let tries = 0; tries < 40; tries++) {
+    const set = new Map(map.mirrors.map((m) => [m.y * w + m.x, m.orient]));
+    const solved = map.emitters.some((e) => hearts.has(traceBeam(w, h, cell, e, (i) => set.get(i), () => false).at(-1)!));
+    if (!solved) return true;
+    for (const m of map.mirrors) m.orient = rng.int(0, 1) as MirrorOrient;
+  }
+  return false;
 }
 
 /** Breadth-first path distance from `from` over walkable tiles; -1 = unreachable. */

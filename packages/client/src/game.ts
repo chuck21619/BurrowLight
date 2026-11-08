@@ -1,6 +1,7 @@
 import { Application, Container, Graphics, Sprite, Text, TextureSource } from 'pixi.js';
 import {
   ActionCost,
+  BEAM_STRENGTH,
   DIRS,
   HEART_CHARGE_TICKS,
   LANTERN_RADIUS,
@@ -9,7 +10,11 @@ import {
   Tile,
   actionCost,
   alliesNeverBlock,
+  beamCellOf,
   computeLight,
+  traceBeam,
+  type Emitter,
+  type MirrorOrient,
   hashSeed,
   isDiagonal,
   resolveMove,
@@ -106,6 +111,10 @@ export class GameView {
   private open = false;
   private light: LightMap | null = null;
   private lightDirty = true;
+  private emitters: Emitter[] = [];
+  private mirrors = new Map<number, MirrorOrient>();
+  private mirrorSprites = new Map<number, Sprite>();
+  private beamGfx = new Graphics();
 
   private avatars = new Map<string, Avatar>();
   private you = '';
@@ -124,6 +133,7 @@ export class GameView {
   private keys = new Set<string>();
   private lastKeyDown = 0;
   private waitRequested = false;
+  private rotateRequested = false;
   /** One buffered key tap, so quick taps (or a tap while busy) are never lost. */
   private tapped: Dir | null = null;
 
@@ -165,8 +175,18 @@ export class GameView {
     this.stairsIdx = -1;
     this.traps.clear();
     this.trapSprites.clear();
+    this.mirrorSprites.clear();
+    this.mirrors.clear();
+    this.emitters = [];
+    for (let k = 0; k < msg.emitters.length; k += 3) {
+      const i = msg.emitters[k]!;
+      this.emitters.push({ x: i % this.w, y: Math.floor(i / this.w), dx: msg.emitters[k + 1]!, dy: msg.emitters[k + 2]! });
+    }
+    this.beamGfx = new Graphics();
     this.addTiles(msg.tiles);
     for (const t of msg.traps) this.addTrap(t);
+    this.setMirrors(msg.mirrors);
+    this.markerLayer.addChild(this.beamGfx);
 
     this.hearts = msg.hearts.map((idx, k) => {
       const bar = new Graphics();
@@ -204,10 +224,32 @@ export class GameView {
       }
     });
     this.setOpen(msg.open);
+    this.setMirrors(msg.mirrors);
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
     this.emitObjective();
     if (msg.runOver) this.onRunOver();
+  }
+
+  private setMirrors(flat: number[]): void {
+    for (let k = 0; k < flat.length; k += 2) {
+      const i = flat[k]!;
+      const o = flat[k + 1]! as MirrorOrient;
+      let s = this.mirrorSprites.get(i);
+      if (!s) {
+        s = new Sprite(this.tex.mirror[o]);
+        s.position.set((i % this.w) * TILE, Math.floor(i / this.w) * TILE);
+        s.scale.set(SCALE);
+        s.visible = false;
+        this.mirrorSprites.set(i, s);
+        this.markerLayer.addChild(s);
+      }
+      if (this.mirrors.get(i) !== o) {
+        this.mirrors.set(i, o);
+        s.texture = this.tex.mirror[o];
+        this.lightDirty = true;
+      }
+    }
   }
 
   private addTiles(flat: number[]): void {
@@ -240,6 +282,8 @@ export class GameView {
         return this.tex.sunshaft;
       case Tile.Heartstone:
         return this.tex.heartstone;
+      case Tile.Sunbeam:
+        return this.tex.sunbeam;
       default:
         return this.tex.floor[hashSeed(x, y) % this.tex.floor.length]!;
     }
@@ -347,6 +391,10 @@ export class GameView {
       if (!e.repeat) this.toggleLantern();
       return;
     }
+    if (e.code === 'KeyE') {
+      if (!e.repeat) this.rotateRequested = true;
+      return;
+    }
     if (e.code === 'Period' || e.code === 'NumpadDecimal' || e.code === 'Numpad5') {
       this.waitRequested = true;
       return;
@@ -394,7 +442,10 @@ export class GameView {
 
     let action: Action | null = null;
     let costOf: Action | null = null;
-    if (this.waitRequested) {
+    if (this.rotateRequested) {
+      this.rotateRequested = false;
+      action = { kind: 'rotate' };
+    } else if (this.waitRequested) {
       this.waitRequested = false;
       action = { kind: 'wait' };
     } else {
@@ -449,7 +500,28 @@ export class GameView {
       if (lit) sources.push({ x: a.tx, y: a.ty, radius: LANTERN_RADIUS, strength: 1 });
     }
     for (const i of this.sunshafts) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: SUNSHAFT_RADIUS, strength: 1 });
-    const light = computeLight(this.w, this.h, this.knownTile, sources);
+
+    // Sunbeams, traced locally like the server does. Critters standing in a beam block it.
+    const occupied = new Set<number>();
+    for (const a of this.avatars.values()) occupied.add(a.ty * this.w + a.tx);
+    const beams = this.emitters
+      .filter((e) => this.tiles[e.y * this.w + e.x] !== UNKNOWN)
+      .map((e) =>
+        traceBeam(
+          this.w,
+          this.h,
+          (x, y) => beamCellOf(this.knownTile(x, y)),
+          e,
+          (i) => this.mirrors.get(i),
+          (i) => occupied.has(i),
+        ),
+      );
+    const light = computeLight(this.w, this.h, this.knownTile, sources, beams, BEAM_STRENGTH);
+    this.drawBeams(beams);
+    for (const [i, s] of this.mirrorSprites) {
+      s.visible = this.tiles[i] !== UNKNOWN;
+      s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
+    }
     this.light = light;
     for (let i = 0; i < this.tileSprites.length; i++) {
       const s = this.tileSprites[i];
@@ -464,6 +536,29 @@ export class GameView {
   }
 
   // ---------- Drawing ----------
+
+  /** A glowing line through the centre of every tile a sunbeam crosses. */
+  private drawBeams(beams: number[][]): void {
+    const g = this.beamGfx;
+    g.clear();
+    for (const path of beams) {
+      if (path.length < 2) continue;
+      const pt = (i: number) => [(i % this.w) * TILE + TILE / 2, Math.floor(i / this.w) * TILE + TILE / 2] as const;
+      for (const [width, alpha] of [
+        [14, 0.18],
+        [6, 0.45],
+        [2, 0.9],
+      ] as const) {
+        const [sx, sy] = pt(path[0]!);
+        g.moveTo(sx, sy);
+        for (const i of path.slice(1)) {
+          const [x, y] = pt(i);
+          g.lineTo(x, y);
+        }
+        g.stroke({ color: 0xffe9a0, width, alpha, cap: 'round', join: 'round' });
+      }
+    }
+  }
 
   private addAvatar(info: PlayerInfo): void {
     const root = new Container();

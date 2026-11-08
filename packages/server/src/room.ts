@@ -12,6 +12,8 @@ import {
   removePlayer,
   setLantern,
   heartIndex,
+  packMirrors,
+  packEmitters,
   step,
   type Action,
   type GameState,
@@ -155,6 +157,7 @@ export class Room {
     const pos = this.positions();
     const tiles = packTiles(game, game.newlyExplored);
     const heartCharge = game.hearts.map((h) => h.charge);
+    const mirrors = packMirrors(game);
     for (const m of this.members.values()) {
       const p = game.players.get(m.id);
       if (!m.peer || !p) continue;
@@ -168,6 +171,7 @@ export class Room {
         heartCharge,
         open: game.exitOpen,
         runOver: game.runOver,
+        mirrors,
       });
     }
   }
@@ -219,6 +223,8 @@ export class Room {
       traps: [...game.revealedTraps],
       open: game.exitOpen,
       runOver: game.runOver,
+      emitters: packEmitters(game),
+      mirrors: packMirrors(game),
     });
   }
 

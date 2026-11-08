@@ -1,5 +1,6 @@
+import { traceBeam, type MirrorOrient } from './beam';
 import { computeLight, type LightMap, type LightSource } from './light';
-import { generateFloor, spawnPoints, tileAt, type FloorMap } from './map';
+import { beamCellOf, generateFloor, spawnPoints, tileAt, type FloorMap } from './map';
 import {
   BASE_SPEED,
   DIRS,
@@ -13,6 +14,7 @@ import {
   OIL_PER_TICK,
   START_OIL,
   SUNSHAFT_RADIUS,
+  BEAM_STRENGTH,
   JITTERS_CALM,
   JITTERS_DARK,
   JITTERS_DARK_WITH_FRIEND,
@@ -79,6 +81,10 @@ export interface GameState {
   newlyRevealed: number[];
   hearts: HeartState[];
   exitOpen: boolean;
+  /** Mirror tile index -> current orientation. */
+  mirrors: Map<number, MirrorOrient>;
+  /** Sunbeams as traced this tick (tile lists, emitter first). */
+  beams: number[][];
   light: LightMap;
   /** True for the step in which the party went down to a new floor. */
   descended: boolean;
@@ -134,6 +140,7 @@ function enterFloor(state: GameState, n: number): void {
   state.newlyRevealed = [];
   state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0 }));
   state.exitOpen = false;
+  state.mirrors = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
   const order = [...state.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
   const spawns = spawnPoints(map, map.entrance, order.length);
   order.forEach((p, i) => {
@@ -204,6 +211,12 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       } else {
         cost = ActionCost.blockedMove;
       }
+    } else if (action.kind === 'rotate') {
+      // Turn the mirror you're standing on.
+      const here = p.y * state.map.w + p.x;
+      const m = state.mirrors.get(here);
+      if (m !== undefined) state.mirrors.set(here, (1 - m) as MirrorOrient);
+      cost = actionCost(action, p.speed);
     } else {
       cost = actionCost(action, p.speed);
     }
@@ -308,10 +321,28 @@ export function lightSources(state: GameState): LightSource[] {
   return out;
 }
 
+/** Trace every sunbeam; critters standing in a beam block it (and are lit by it). */
+export function traceBeams(state: GameState): number[][] {
+  const { map } = state;
+  const occupied = new Set<number>();
+  for (const p of state.players.values()) occupied.add(p.y * map.w + p.x);
+  return map.emitters.map((e) =>
+    traceBeam(
+      map.w,
+      map.h,
+      (x, y) => beamCellOf(tileAt(map, x, y)),
+      e,
+      (i) => state.mirrors.get(i),
+      (i) => occupied.has(i),
+    ),
+  );
+}
+
 /** Recompute light; lit tiles become explored, and lit traps become visible to the party. */
 function updateLight(state: GameState): void {
   const { map } = state;
-  state.light = computeLight(map.w, map.h, (x, y) => tileAt(map, x, y), lightSources(state));
+  state.beams = traceBeams(state);
+  state.light = computeLight(map.w, map.h, (x, y) => tileAt(map, x, y), lightSources(state), state.beams, BEAM_STRENGTH);
   const { level } = state.light;
   for (let i = 0; i < level.length; i++) {
     if (!level[i]) continue;
@@ -330,6 +361,18 @@ function reveal(state: GameState, i: number): void {
 }
 
 export const heartIndex = (state: GameState, h: { x: number; y: number }): number => h.y * state.map.w + h.x;
+
+/** Mirrors as a flat [index, orientation, ...] list. */
+export function packMirrors(state: GameState): number[] {
+  const out: number[] = [];
+  for (const [i, o] of state.mirrors) out.push(i, o);
+  return out;
+}
+
+/** Emitters as a flat [index, dx, dy, ...] list. */
+export function packEmitters(state: GameState): number[] {
+  return state.map.emitters.flatMap((e) => [e.y * state.map.w + e.x, e.dx, e.dy]);
+}
 
 /** Explored tiles as a flat [index, type, index, type, ...] list. */
 export function packTiles(state: GameState, indices: Iterable<number>): number[] {

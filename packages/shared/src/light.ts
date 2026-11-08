@@ -18,12 +18,17 @@ export interface LightMap {
   glow: Float32Array;
 }
 
-/** Cast every light source over the map; walls stop light. Overlapping sources add up. */
+/**
+ * Cast every light source over the map; walls stop light. Overlapping sources add up.
+ * `beams` are already-traced sunbeams (tile lists), each adding `beamStrength` along its path.
+ */
 export function computeLight(
   w: number,
   h: number,
   tile: (x: number, y: number) => number,
   sources: readonly LightSource[],
+  beams: readonly (readonly number[])[] = [],
+  beamStrength = 2,
 ): LightMap {
   const level = new Uint8Array(w * h);
   const glow = new Float32Array(w * h);
@@ -45,6 +50,15 @@ export function computeLight(
         glow[i] = glow[i]! + s.strength * Math.max(0.2, 1 - d / (s.radius + 1));
       },
     );
+  });
+  beams.forEach((path, bi) => {
+    const mark = -(bi + 1);
+    for (const i of path) {
+      if (stamp[i] === mark) continue;
+      stamp[i] = mark;
+      level[i] = Math.min(255, level[i]! + beamStrength);
+      glow[i] = glow[i]! + 1.4;
+    }
   });
   return { w, h, level, glow };
 }

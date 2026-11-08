@@ -15,6 +15,8 @@ import {
   computeLight,
   setLantern,
   MAX_OIL,
+  traceBeam,
+  beamCellOf,
   JITTERS_MAX,
   JITTERS_DARK,
   JITTERS_DARK_WITH_FRIEND,
@@ -66,7 +68,7 @@ function asciiMap(rows: string[]): FloorMap {
   const w = rows[0]!.length;
   const tiles = new Uint8Array(w * h);
   rows.forEach((r, y) => [...r].forEach((c, x) => (tiles[y * w + x] = c === '#' ? Tile.Wall : Tile.Floor)));
-  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [] };
+  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [], emitters: [], mirrors: [] };
 }
 
 describe('field of view', () => {
@@ -311,6 +313,7 @@ describe('light prototype', () => {
     const heart = game.hearts[0]!;
     const a = game.players.get('a')!;
     game.map.sunshafts = []; // no help from sunlight in this test
+    game.map.emitters = [];
     a.x = heart.x - 1;
     a.y = heart.y;
     setLantern(game, 'a', true);
@@ -346,6 +349,7 @@ describe('compact floors and the Jitters', () => {
       { id: 'b', name: 'B', color: 2 },
     ]);
     game.map.sunshafts = []; // pitch black everywhere
+    game.map.emitters = [];
     return game;
   };
 
@@ -400,5 +404,88 @@ describe('compact floors and the Jitters', () => {
     const tick = game.tick;
     step(game);
     expect(game.tick).toBe(tick); // nothing moves after the run ends
+  });
+});
+
+describe('sunbeams and mirrors', () => {
+  const room = asciiMap(['#######', '#.....#', '#.....#', '#.....#', '#######']);
+  const cell = (x: number, y: number) => beamCellOf(room.tiles[y * room.w + x] ?? Tile.Wall);
+  const at = (x: number, y: number) => y * room.w + x;
+
+  it('travels straight, bounces off "/" and "\\" mirrors, and stops at walls and critters', () => {
+    const e = { x: 1, y: 2, dx: 1, dy: 0 };
+    const none = () => undefined;
+    expect(traceBeam(room.w, room.h, cell, e, none, () => false)).toEqual([at(1, 2), at(2, 2), at(3, 2), at(4, 2), at(5, 2)]);
+    // "/" at (3,2): heading east turns north.
+    const slash = (i: number) => (i === at(3, 2) ? 0 : undefined);
+    expect(traceBeam(room.w, room.h, cell, e, slash, () => false).at(-1)).toBe(at(3, 1));
+    // "\" at (3,2): heading east turns south.
+    const back = (i: number) => (i === at(3, 2) ? 1 : undefined);
+    expect(traceBeam(room.w, room.h, cell, e, back, () => false).at(-1)).toBe(at(3, 3));
+    // A critter at (2,2) is lit, and blocks the rest.
+    expect(traceBeam(room.w, room.h, cell, e, none, (i) => i === at(2, 2))).toEqual([at(1, 2), at(2, 2)]);
+  });
+
+  it('every generated beam puzzle has a mirror setting that lights its Heartstone, and starts unsolved', () => {
+    let puzzles = 0;
+    for (let seed = 1; seed <= 120; seed++) {
+      const map = generateFloor(seed, (seed % 5) + 1, 2);
+      const tileCell = (x: number, y: number) => beamCellOf(map.tiles[y * map.w + x] ?? Tile.Wall);
+      const heartIdx = new Set(map.hearts.map((hp) => hp.y * map.w + hp.x));
+      const mirrorIdx = map.mirrors.map((m) => m.y * map.w + m.x);
+      for (const e of map.emitters) {
+        puzzles++;
+        expect(map.tiles[e.y * map.w + e.x]).toBe(Tile.Sunbeam);
+        // Starting settings: the beam must not already end in a Heartstone.
+        const startSet = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
+        const startEnd = traceBeam(map.w, map.h, tileCell, e, (i) => startSet.get(i), () => false).at(-1)!;
+        expect(heartIdx.has(startEnd)).toBe(false);
+        // Some setting of the mirrors solves it (brute force over every combination).
+        let solvable = false;
+        for (let mask = 0; mask < 1 << mirrorIdx.length && !solvable; mask++) {
+          const set = new Map(mirrorIdx.map((i, k) => [i, ((mask >> k) & 1) as 0 | 1]));
+          const end = traceBeam(map.w, map.h, tileCell, e, (i) => set.get(i), () => false).at(-1)!;
+          solvable = heartIdx.has(end);
+        }
+        expect(solvable, `seed ${seed}`).toBe(true);
+      }
+      // Traps never sit on mirrors or emitters.
+      for (const t of map.traps) {
+        expect(mirrorIdx).not.toContain(t);
+        expect(map.emitters.some((e) => e.y * map.w + e.x === t)).toBe(false);
+      }
+    }
+    expect(puzzles).toBeGreaterThan(80); // most Heartstones get a beam puzzle
+  });
+
+  it('turning the mirror you stand on, then stepping out of the beam, charges the Heartstone with sunlight alone', () => {
+    // Find a generated floor whose puzzle needs exactly one mirror turned.
+    for (let seed = 1; seed < 400; seed++) {
+      const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }]);
+      const { map } = game;
+      if (map.emitters.length !== 1 || map.hearts.length !== 1) continue;
+      game.map.sunshafts = [];
+      const heart = map.hearts[0]!.y * map.w + map.hearts[0]!.x;
+      const wrong = [...game.mirrors.keys()].find((i) => {
+        const trial = new Map(game.mirrors);
+        trial.set(i, (1 - trial.get(i)!) as 0 | 1);
+        const cellOf = (x: number, y: number) => beamCellOf(map.tiles[y * map.w + x] ?? Tile.Wall);
+        return traceBeam(map.w, map.h, cellOf, map.emitters[0]!, (k) => trial.get(k), () => false).at(-1) === heart;
+      });
+      if (wrong === undefined) continue;
+      const a = game.players.get('a')!;
+      a.x = wrong % map.w;
+      a.y = Math.floor(wrong / map.w);
+      queueIntent(game, 'a', 1, { kind: 'rotate' });
+      step(game);
+      expect(game.mirrors.get(wrong)).not.toBe(map.mirrors.find((m) => m.y * map.w + m.x === wrong)!.orient);
+      // Standing on the mirror blocks the beam, so step off it (anywhere away from the path).
+      a.x = map.entrance.x;
+      a.y = map.entrance.y;
+      for (let i = 0; i < HEART_CHARGE_TICKS; i++) step(game);
+      expect(game.exitOpen).toBe(true);
+      return;
+    }
+    throw new Error('no one-turn puzzle found');
   });
 });
