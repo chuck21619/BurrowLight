@@ -3,7 +3,7 @@ import {
   ActionCost,
   BEAM_STRENGTH,
   DIRS,
-  HEART_CHARGE_TICKS,
+  HEART_FULL,
   LANTERN_RADIUS,
   MAX_QUEUED_INTENTS,
   SUNSHAFT_RADIUS,
@@ -310,7 +310,7 @@ export class GameView {
 
   /** A small charge bar above each Heartstone, always visible so the party knows where to go. */
   private drawHeartBar(heart: Heart): void {
-    const f = heart.charge / HEART_CHARGE_TICKS;
+    const f = heart.charge / HEART_FULL;
     const g = heart.bar;
     g.clear();
     g.roundRect(4, -12, TILE - 8, 8, 3).fill({ color: 0x0b0a10, alpha: 0.8 });
@@ -695,7 +695,7 @@ export class GameView {
 
   private emitObjective(): void {
     this.onObjective({
-      charged: this.hearts.filter((h) => h.charge >= HEART_CHARGE_TICKS).length,
+      charged: this.hearts.filter((h) => h.charge >= HEART_FULL).length,
       total: this.hearts.length,
       open: this.open,
     });

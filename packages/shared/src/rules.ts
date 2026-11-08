@@ -33,11 +33,14 @@ export const JITTERS_DARK = 2;
 export const JITTERS_DARK_WITH_FRIEND = 1;
 /** Per tick standing in any light: calms from full in 10 s. */
 export const JITTERS_CALM = 6;
-/** How long a booby trap knocks you out. */
-export const KO_TICKS = 30;
-/** Light level a Heartstone needs (two sources at once), and how long it must be held. */
-export const HEART_NEED = 2;
-export const HEART_CHARGE_TICKS = 30;
+/** How long a booby trap knocks you out: 10 s, long enough that waking a friend matters. */
+export const KO_TICKS = 100;
+/**
+ * Heartstones charge by the light reaching them each tick (any light counts; more light is
+ * faster) and slowly fade when dark. One lantern fills one in 6 s, two lanterns or a sunbeam in 3 s.
+ */
+export const HEART_FULL = 60;
+export const HEART_FADE = 1;
 /** About one Heartstone per two players. */
 export const heartsForParty = (players: number): number => Math.max(1, Math.ceil(players / 2));
 /** Real actions a player may have waiting on the server at once. */

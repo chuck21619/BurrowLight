@@ -216,7 +216,7 @@ let floorText = '';
 game.onObjective = ({ charged, total, open }) => {
   const goal = open
     ? 'The hatch is open! Everyone gather on the ladder.'
-    : `Light the Heartstone${total > 1 ? 's' : ''} (${charged}/${total}): two lights at once`;
+    : `Light the Heartstone${total > 1 ? 's' : ''} (${charged}/${total}): more light charges it faster`;
   $('banner').replaceChildren(document.createTextNode(floorText), document.createElement('br'), Object.assign(document.createElement('small'), { textContent: goal }));
 };
 const debugEl = $('debug');

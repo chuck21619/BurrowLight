@@ -4,8 +4,8 @@ import { beamCellOf, generateFloor, spawnPoints, tileAt, type FloorMap } from '.
 import {
   BASE_SPEED,
   DIRS,
-  HEART_CHARGE_TICKS,
-  HEART_NEED,
+  HEART_FADE,
+  HEART_FULL,
   KO_TICKS,
   LANTERN_RADIUS,
   MAX_OIL,
@@ -244,10 +244,10 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   updateJitters(state, order);
 
   for (const h of state.hearts) {
-    const lit = state.light.level[h.y * state.map.w + h.x]! >= HEART_NEED;
-    h.charge = lit ? Math.min(HEART_CHARGE_TICKS, h.charge + 1) : Math.max(0, h.charge - 1);
+    const light = state.light.level[h.y * state.map.w + h.x]!;
+    h.charge = light > 0 ? Math.min(HEART_FULL, h.charge + light) : Math.max(0, h.charge - HEART_FADE);
   }
-  if (!state.exitOpen && state.hearts.every((h) => h.charge >= HEART_CHARGE_TICKS)) state.exitOpen = true;
+  if (!state.exitOpen && state.hearts.every((h) => h.charge >= HEART_FULL)) state.exitOpen = true;
 
   if (state.exitOpen) {
     const present = order.filter((p) => opts.isPresent?.(p.id) ?? true);

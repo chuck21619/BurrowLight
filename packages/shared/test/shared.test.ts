@@ -22,7 +22,7 @@ import {
   JITTERS_DARK_WITH_FRIEND,
   JITTERS_CALM,
   KO_TICKS,
-  HEART_CHARGE_TICKS,
+  HEART_FULL,
   OIL_PER_FLOOR,
   type FloorMap,
 } from '../src/index';
@@ -284,7 +284,7 @@ describe('light prototype', () => {
     expect(a.lastAck).toBe(4);
   });
 
-  it('charges a Heartstone with two lights, opens the exit, and goes down when everyone is on the ladder', () => {
+  it('two lanterns fill a Heartstone in half the time, open the exit, and the party goes down from the ladder', () => {
     const game = two();
     const heart = game.hearts[0]!;
     const [a, b] = [game.players.get('a')!, game.players.get('b')!];
@@ -295,7 +295,7 @@ describe('light prototype', () => {
     b.y = heart.y;
     setLantern(game, 'a', true);
     setLantern(game, 'b', true);
-    for (let i = 0; i < HEART_CHARGE_TICKS; i++) step(game);
+    for (let i = 0; i < HEART_FULL / 2; i++) step(game);
     expect(game.exitOpen).toBe(true);
 
     const oilBefore = a.oil;
@@ -308,7 +308,7 @@ describe('light prototype', () => {
     expect(a.oil).toBe(Math.min(MAX_OIL, oilBefore - 1 + OIL_PER_FLOOR));
   });
 
-  it('one lantern alone is not enough for a Heartstone', () => {
+  it('one lantern alone charges a Heartstone too, at half the speed, and it fades in the dark', () => {
     const game = two();
     const heart = game.hearts[0]!;
     const a = game.players.get('a')!;
@@ -317,8 +317,15 @@ describe('light prototype', () => {
     a.x = heart.x - 1;
     a.y = heart.y;
     setLantern(game, 'a', true);
-    for (let i = 0; i < HEART_CHARGE_TICKS + 5; i++) step(game);
-    expect(game.hearts[0]!.charge).toBe(0);
+    for (let i = 0; i < HEART_FULL / 2; i++) step(game);
+    expect(game.hearts[0]!.charge).toBe(HEART_FULL / 2);
+    expect(game.exitOpen).toBe(false);
+    setLantern(game, 'a', false);
+    step(game);
+    expect(game.hearts[0]!.charge).toBe(HEART_FULL / 2 - 1);
+    setLantern(game, 'a', true);
+    for (let i = 0; i < HEART_FULL / 2 + 1; i++) step(game);
+    expect(game.exitOpen).toBe(true);
   });
 });
 
@@ -482,7 +489,7 @@ describe('sunbeams and mirrors', () => {
       // Standing on the mirror blocks the beam, so step off it (anywhere away from the path).
       a.x = map.entrance.x;
       a.y = map.entrance.y;
-      for (let i = 0; i < HEART_CHARGE_TICKS; i++) step(game);
+      for (let i = 0; i < HEART_FULL / 2; i++) step(game); // a beam counts as two lights
       expect(game.exitOpen).toBe(true);
       return;
     }
