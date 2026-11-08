@@ -398,6 +398,9 @@ export function generateBossFloor(seed: number, floor: number): FloorMap {
   throw new Error(`could not generate boss floor for seed ${seed}`);
 }
 
+/** Share of a boss room's open floor that some mirror setting can put a sunbeam across. */
+export const BEAM_SHARE = 0.4;
+
 function tryBossRoom(rng: Rng): FloorMap | null {
   const w = rng.int(20, 24);
   const h = rng.int(13, 15);
@@ -464,22 +467,24 @@ function tryBossRoom(rng: Rng): FloorMap | null {
   const d = distanceMap(tiles, w, h, entrance);
   for (let i = 0; i < tiles.length; i++) if (isWalkable(tiles[i]!) && d[i]! < 0) return null;
 
-  // Guarantee: wherever the Gloom ends up touching the Great Heartstone, some mirror setting swings
-  // a sunbeam through it. Add mirrors on beam-reachable tiles until every such spot is covered.
-  const goals = gloomGoalSpots(w, h, tiles, heart);
-  const covered = () => {
+  // Guarantee: mirrors can swing sunbeams across a good share of the open room, so a critter with a
+  // lantern can lead the Gloom across a beam's path and someone can flip it onto it. Add mirrors on
+  // beam-reachable tiles until the share is met. (No beams are needed around the Great Heartstone.)
+  const open = [] as number[];
+  for (let i = 0; i < tiles.length; i++) if (isWalkable(tiles[i]!)) open.push(i);
+  const share = () => {
     const reach = beamReach(w, h, tiles, emitters, new Set(mirrors.map((m) => m.y * w + m.x)));
-    return goals.filter((foot) => foot.some((i) => reach.has(i))).length;
+    return open.filter((i) => reach.has(i)).length / open.length;
   };
-  let have = covered();
-  for (let added = 0; added < 6 && have < goals.length; added++) {
+  let have = share();
+  for (let added = 0; added < 6 && have < BEAM_SHARE; added++) {
     const reach = beamReach(w, h, tiles, emitters, new Set(mirrors.map((m) => m.y * w + m.x)));
     let bestTile = -1;
     let bestHave = have;
     for (const i of reach) {
       if (tiles[i] !== Tile.Floor || reserved.has(i)) continue;
       mirrors.push({ x: i % w, y: Math.floor(i / w), orient: 0 });
-      const n = covered();
+      const n = share();
       mirrors.pop();
       if (n > bestHave) {
         bestHave = n;
@@ -491,7 +496,7 @@ function tryBossRoom(rng: Rng): FloorMap | null {
     reserved.add(bestTile);
     have = bestHave;
   }
-  if (goals.length === 0 || have < goals.length) return null;
+  if (have < BEAM_SHARE) return null;
 
   // The Gloom starts far from the Great Heartstone and the party, outside any starting beam.
   const mset = new Map(mirrors.map((m) => [m.y * w + m.x, m.orient]));

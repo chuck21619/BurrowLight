@@ -16,10 +16,11 @@ import {
   SUNSHAFT_RADIUS,
   BEAM_STRENGTH,
   gloomDrain,
+  GLOOM_BRIGHTNESS_WEIGHT,
   GLOOM_STEP,
-  GLOOM_STEP_LIT,
   GLOOM_STEP_RESTLESS,
-  GLOOM_STEP_RESTLESS_LIT,
+  GLOOM_STONE_BASE,
+  GLOOM_STONE_FULL_BONUS,
   GLOOM_TOUCH_COOLDOWN,
   GLOOM_WRIGGLE,
   GREAT_HEART_FULL,
@@ -399,9 +400,9 @@ const STEPS: [number, number][] = [
 ];
 
 /**
- * The Gloom drifts toward the Great Heartstone, never into a sunbeam, and avoids other light
- * (it moves at half speed when lantern light touches it). A sunbeam through it pins it; pinned,
- * it wriggles one tile at a time, trying to get out of the light. Returns true if it moved.
+ * The Gloom eats light: it heads for the brightest light it can reach (lanterns, or the Great
+ * Heartstone), never into a sunbeam, the only light that hurts it. A sunbeam through it pins it;
+ * pinned, it wriggles one tile at a time, trying to get out of the light. Returns true if it moved.
  */
 function updateGloom(state: GameState): boolean {
   const g = state.gloom;
@@ -441,48 +442,87 @@ function updateGloom(state: GameState): boolean {
   }
   if (state.tick < g.nextStepAt) return false;
 
-  // Distance (in Gloom steps) to a spot touching the Great Heartstone, never through a sunbeam.
-  const dist = new Map<number, number>();
-  const queue: [number, number][] = [];
-  for (let y = 1; y < map.h - 2; y++)
-    for (let x = 1; x < w - 2; x++)
-      if (valid(x, y) && clear(x, y) && touchesHeart(x, y)) {
-        dist.set(y * w + x, 0);
-        queue.push([x, y]);
-      }
+  // It eats light: head for the brightest light it can reach. Search outward from where it is,
+  // never through a sunbeam (the only light that hurts it).
+  const from = g.y * w + g.x;
+  const dist = new Map<number, number>([[from, 0]]);
+  const parent = new Map<number, number>();
+  const queue: [number, number][] = [[g.x, g.y]];
   for (let qi = 0; qi < queue.length; qi++) {
     const [x, y] = queue[qi]!;
     const d = dist.get(y * w + x)!;
     for (const [dx, dy] of STEPS.slice(1)) {
       const nx = x + dx;
       const ny = y + dy;
-      if (dist.has(ny * w + nx) || !valid(nx, ny) || !clear(nx, ny)) continue;
-      dist.set(ny * w + nx, d + 1);
+      const k = ny * w + nx;
+      if (dist.has(k) || !valid(nx, ny) || !clear(nx, ny)) continue;
+      dist.set(k, d + 1);
+      parent.set(k, y * w + x);
       queue.push([nx, ny]);
     }
   }
-  const lightOn = (x: number, y: number) => gloomFootprint(w, x, y).reduce((s, i) => s + state.light.level[i]!, 0);
-  let best: [number, number] = [0, 0];
-  let bestScore = Infinity;
-  for (const [dx, dy] of STEPS) {
-    const nx = g.x + dx;
-    const ny = g.y + dy;
-    if (!valid(nx, ny) || !clear(nx, ny)) continue;
-    const score = (dist.get(ny * w + nx) ?? 999) * 10 + lightOn(nx, ny) * 3;
-    if (score < bestScore) {
-      bestScore = score;
-      best = [dx, dy];
-    }
-  }
-  const lit = lightOn(g.x, g.y) > 0;
-  const step = g.restless ? (lit ? GLOOM_STEP_RESTLESS_LIT : GLOOM_STEP_RESTLESS) : lit ? GLOOM_STEP_LIT : GLOOM_STEP;
-  g.nextStepAt = state.tick + step;
-  if (best[0] === 0 && best[1] === 0) return false;
-  g.x += best[0];
-  g.y += best[1];
-  [g.dx, g.dy] = best;
+  const target = chooseLight(state, dist, touchesHeart);
+  g.nextStepAt = state.tick + (g.restless ? GLOOM_STEP_RESTLESS : GLOOM_STEP);
+  if (!target) return false;
+  // Eyes on the prize.
+  const cx = g.x + 0.5;
+  const cy = g.y + 0.5;
+  g.dx = Math.sign(Math.round(target.lookX - cx)) || 0;
+  g.dy = Math.sign(Math.round(target.lookY - cy)) || 0;
+  if (target.spot === from) return false;
+  let next = target.spot;
+  while (parent.get(next) !== from) next = parent.get(next)!;
+  g.x = next % w;
+  g.y = Math.floor(next / w);
   settle();
   return true;
+}
+
+interface LightTarget {
+  /** The Gloom position (top-left index) to head for. */
+  spot: number;
+  /** Where its eyes should look. */
+  lookX: number;
+  lookY: number;
+}
+
+/**
+ * The Gloom wants the brightest light it can reach, weighed against how far away it is.
+ * Lanterns stack: critters standing together are a brighter, juicier target. The Great
+ * Heartstone glows brighter as it charges, so it pulls harder the fuller it gets.
+ */
+function chooseLight(state: GameState, dist: Map<number, number>, touchesHeart: (x: number, y: number) => boolean): LightTarget | null {
+  const { map } = state;
+  const w = map.w;
+  const heart = state.hearts[0]!;
+  let best: LightTarget | null = null;
+  let bestScore = -Infinity;
+  const consider = (spot: number, brightness: number, lookX: number, lookY: number) => {
+    const d = dist.get(spot);
+    if (d === undefined) return;
+    const score = brightness * GLOOM_BRIGHTNESS_WEIGHT - d;
+    if (score > bestScore) {
+      bestScore = score;
+      best = { spot, lookX, lookY };
+    }
+  };
+  // The Great Heartstone: any spot touching it.
+  const stoneBrightness = GLOOM_STONE_BASE + GLOOM_STONE_FULL_BONUS * (heart.charge / heart.max);
+  for (const k of dist.keys()) if (touchesHeart(k % w, Math.floor(k / w))) consider(k, stoneBrightness, heart.x, heart.y);
+  // Lit lanterns: a spot whose footprint covers the critter (so it can eat the light).
+  const lit = [...state.players.values()].filter((p) => p.lit);
+  for (const p of lit) {
+    const stack = lit.filter((q) => Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= 1).length;
+    for (const [ox, oy] of [
+      [0, 0],
+      [-1, 0],
+      [0, -1],
+      [-1, -1],
+    ]) {
+      consider((p.y + oy) * w + p.x + ox, stack, p.x, p.y);
+    }
+  }
+  return best;
 }
 
 /** Drifting through a critter snuffs its lantern and gives it a big burst of the Jitters. */

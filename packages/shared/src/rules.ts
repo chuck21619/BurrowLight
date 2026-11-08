@@ -44,13 +44,19 @@ export const HEART_FADE = 1;
 // ---- The Gloom (act 1 boss) ----
 /** Floors 3, 6 and 9 end in a boss room. */
 export const isBossFloor = (floor: number): boolean => floor % 3 === 0;
-/** The Gloom moves one tile every this many ticks: slower than a walking critter (2). */
+/** The Gloom moves one tile every this many ticks: slower than a walking critter (2), so you can lead it. */
 export const GLOOM_STEP = 3;
-/** ...and half as fast when lantern light touches it. */
-export const GLOOM_STEP_LIT = 6;
-/** Restless (after a third of the Great Heartstone is charged) it speeds up. */
+/** Restless (after a third of the Great Heartstone is charged) it speeds up to critter pace. */
 export const GLOOM_STEP_RESTLESS = 2;
-export const GLOOM_STEP_RESTLESS_LIT = 4;
+/**
+ * It eats light, going for the brightest light it can reach: score = brightness × weight − distance.
+ * A lit lantern is brightness 1 (more for critters standing together). The Great Heartstone is dim
+ * when empty (0.6), so a single lantern easily lures the Gloom away early on, and glows up to 3.0
+ * when nearly full, when it takes a huddle or a very close lantern to pull the Gloom off it.
+ */
+export const GLOOM_BRIGHTNESS_WEIGHT = 10;
+export const GLOOM_STONE_BASE = 0.6;
+export const GLOOM_STONE_FULL_BONUS = 2.4;
 /** While pinned in a sunbeam it wriggles one tile every this many ticks: 4 s, then 3 s, then 2 s. */
 export const GLOOM_WRIGGLE = [40, 30, 20] as const;
 /**

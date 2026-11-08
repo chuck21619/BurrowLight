@@ -20,7 +20,7 @@ import {
   GLOOM_DRAIN_NEAR,
   GLOOM_DRAIN_FAR,
   gloomDrain,
-  gloomGoalSpots,
+  BEAM_SHARE,
   beamReach,
   GLOOM_WRIGGLE,
   traceBeam,
@@ -591,35 +591,67 @@ describe('the Gloom', () => {
     expect(d).toBeGreaterThan(0);
   });
 
-  it('exact check on sample rooms: a real mirror setting pins the Gloom at every spot by the Great Heartstone', () => {
-    for (let seed = 1; seed <= 12; seed++) {
-      const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }], 3);
-      const { map } = game;
-      const keys = [...game.mirrors.keys()];
-      const cell = (x: number, y: number) => beamCellOf(map.tiles[y * map.w + x] ?? Tile.Wall);
-      for (const foot of gloomGoalSpots(map.w, map.h, map.tiles, map.hearts[0]!)) {
-        const inFoot = (i: number) => foot.includes(i);
-        let pinned = false;
-        for (let mask = 0; mask < 1 << keys.length && !pinned; mask++) {
-          const set = new Map(keys.map((i, k) => [i, ((mask >> k) & 1) as 0 | 1]));
-          pinned = map.emitters.some((e) => traceBeam(map.w, map.h, cell, e, (i) => set.get(i), inFoot).some(inFoot));
-        }
-        expect(pinned, `seed ${seed}`).toBe(true);
-      }
-    }
-  });
-
-  it('wherever the Gloom touches the Great Heartstone, some mirror setting can pin it there', () => {
+  it('mirrors can swing sunbeams across at least 40% of every boss room', () => {
     for (let seed = 1; seed <= 60; seed++) {
       for (const floor of [3, 6, 9]) {
         const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }], floor);
         const { map } = game;
-        const goals = gloomGoalSpots(map.w, map.h, map.tiles, map.hearts[0]!);
         const reach = beamReach(map.w, map.h, map.tiles, map.emitters, new Set(game.mirrors.keys()));
-        expect(goals.length).toBeGreaterThan(0);
-        for (const foot of goals) expect(foot.some((i) => reach.has(i)), `seed ${seed} floor ${floor}`).toBe(true);
+        let open = 0;
+        let lit = 0;
+        for (let i = 0; i < map.tiles.length; i++) {
+          if (!isWalkable(map.tiles[i]!)) continue;
+          open++;
+          if (reach.has(i)) lit++;
+        }
+        expect(lit / open, `seed ${seed} floor ${floor}`).toBeGreaterThanOrEqual(BEAM_SHARE);
       }
     }
+  });
+
+  it('it eats light: a nearby lit lantern pulls it away from the Great Heartstone', () => {
+    const game = bossGame();
+    game.map.emitters = [];
+    game.mirrors.clear();
+    game.map.sunshafts = [];
+    const g = game.gloom!;
+    const a = game.players.get('a')!;
+    const b = game.players.get('b')!;
+    b.x = game.map.entrance.x;
+    b.y = game.map.entrance.y;
+    // Stand a few tiles from the Gloom with a lantern lit, on the side away from the stone.
+    const heart = game.hearts[0]!;
+    const away = Math.sign(g.x - heart.x) || 1;
+    a.x = Math.max(1, Math.min(game.map.w - 2, g.x + away * 3));
+    a.y = g.y;
+    game.map.tiles[a.y * game.map.w + a.x] = Tile.Floor;
+    setLantern(game, 'a', true);
+    const startGap = Math.abs(g.x - a.x);
+    for (let i = 0; i < 30; i++) {
+      step(game);
+      a.lit = true; // keep the bait lit even if it gets eaten, to watch the chase
+      a.gloomTouchAt = game.tick; // and don't let the touch snuff it
+    }
+    expect(Math.abs(game.gloom!.x - a.x)).toBeLessThan(startGap);
+  });
+
+  it('critters huddled with lanterns are a brighter target than one lantern alone', () => {
+    const game = bossGame();
+    game.map.emitters = [];
+    game.mirrors.clear();
+    const [a, b] = [game.players.get('a')!, game.players.get('b')!];
+    const g = game.gloom!;
+    // One lantern on the left, two together on the right, both 4 tiles away.
+    a.x = g.x - 4; a.y = g.y;
+    b.x = g.x + 5; b.y = g.y;
+    for (const p of [a, b]) game.map.tiles[p.y * game.map.w + p.x] = Tile.Floor;
+    for (let x = g.x - 4; x <= g.x + 6; x++) game.map.tiles[g.y * game.map.w + x] = Tile.Floor;
+    for (let x = g.x - 4; x <= g.x + 6; x++) game.map.tiles[(g.y + 1) * game.map.w + x] = Tile.Floor;
+    game.players.set('c', { ...b, id: 'c', joinOrder: 2, queue: [] });
+    for (const p of game.players.values()) p.lit = true;
+    game.gloom!.nextStepAt = 0;
+    step(game);
+    expect(game.gloom!.dx).toBe(1); // looking toward the pair
   });
 
   it('a sunbeam through it pins it, cuts the tether so light charges the stone, and it wriggles free a tile at a time', () => {
