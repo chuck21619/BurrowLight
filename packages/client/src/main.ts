@@ -457,7 +457,8 @@ game.onObjective = ({ charged, total, open, gloom, pinned, intro, moth, mothOnSt
   $('banner').replaceChildren(document.createTextNode(floorText), document.createElement('br'), Object.assign(document.createElement('small'), { textContent: goal }));
 };
 const debugEl = $('debug');
-game.onDebug = (t) => (debugEl.textContent = t);
+// The tick / fps readout is for development only.
+if (import.meta.env.DEV) game.onDebug = (t) => (debugEl.textContent = t);
 
 // ---------- Messages ----------
 
