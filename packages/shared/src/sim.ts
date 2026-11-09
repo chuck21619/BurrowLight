@@ -305,13 +305,6 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       p.x = p.digging.b % state.map.w;
       p.y = Math.floor(p.digging.b / state.map.w);
       p.digging = null;
-      if (state.traps.has(p.y * state.map.w + p.x)) {
-        p.koUntil = state.tick + KO_TICKS;
-        p.readyAt = p.koUntil;
-        p.lit = false;
-        clearQueue(p);
-        reveal(state, p.y * state.map.w + p.x);
-      }
     }
     if (p.panic && state.tick >= p.readyAt) {
       p.queue.push({ seq: p.lastAck, action: { kind: 'move', dir: panicStep(state, p) } });
@@ -750,6 +743,8 @@ export function planTunnel(state: GameState, x: number, y: number, dir: 'n' | 's
   const b = oy * map.w + ox;
   // One tunnel per spot: don't dig where a tunnel already starts or ends.
   if (state.tunnels.some((t) => t.a === a || t.b === a || t.a === b || t.b === b)) return null;
+  // Never on top of a trap, at either end.
+  if (state.traps.has(a) || state.traps.has(b)) return null;
   return { a, b };
 }
 
@@ -772,7 +767,10 @@ export function digVerdict(state: GameState, playerId: string, dir: 'n' | 's' | 
   const out = tileAt(map, p.x + dx * n, p.y + dy * n);
   if (canTunnelUnder(out)) return { ok: false, reason: 'Too thick to dig under' };
   if (!isDiggableGround(out)) return { ok: false, reason: "Can't dig here" };
-  if (!planTunnel(state, p.x, p.y, dir)) return { ok: false, reason: 'Already a tunnel here' };
+  const a = p.y * map.w + p.x;
+  const b = (p.y + dy * n) * map.w + p.x + dx * n;
+  if (state.tunnels.some((t) => t.a === a || t.b === a || t.a === b || t.b === b)) return { ok: false, reason: 'Already a tunnel here' };
+  if (!planTunnel(state, p.x, p.y, dir)) return { ok: false, reason: "Can't dig here" };
   return { ok: true, reason: '' };
 }
 

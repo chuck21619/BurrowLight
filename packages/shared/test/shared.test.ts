@@ -972,6 +972,16 @@ describe('burrowing', () => {
     expect(game.tunnels.length).toBe(0);
   });
 
+  it('tunnels never start or end on a trap', () => {
+    const { game, a, dir, plan } = withSoil();
+    game.traps.add(plan.b);
+    expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
+    expect(digVerdict(game, 'a', dir).ok).toBe(false);
+    game.traps.delete(plan.b);
+    game.traps.add(plan.a);
+    expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
+  });
+
   it('no second tunnel from the same spot', () => {
     const { game, a, dir, plan } = withSoil();
     game.tunnels.push({ a: plan.a, b: plan.b, owner: 'b' });
