@@ -13,7 +13,8 @@ import {
   type ServerMessage,
   type TalentId,
 } from '@burrowlight/shared';
-import { GEAR, gearDef, type GearSlot, type Loadout } from '@burrowlight/shared';
+import { GEAR, gearDef, type GearId, type GearSlot, type Loadout } from '@burrowlight/shared';
+import { gearIcon } from './gearIcons';
 import { GameView } from './game';
 import { setSoundMuted, sfx } from './sound';
 import { markTipSeen, muted, progress, recordFeats, setMuted, setTipsOn, setWearing, tipsOn, tipsSeen, unlocked, wearing } from './save';
@@ -172,34 +173,71 @@ function sendGear() {
   net.send({ t: 'gear', gear: wearing() });
 }
 
+function gearDescription(id: string | undefined, slot: GearSlot): string {
+  const g = id ? gearDef(id) : undefined;
+  if (!g) return `${SLOT_NAMES[slot]}: nothing.`;
+  if (!unlocked(g.id)) return `${g.name} (locked): ${g.unlock}${g.needs > 1 ? ` ${progress(g)}/${g.needs}` : ''}`;
+  return `${g.name}: ${g.text}`;
+}
+
 function renderGear() {
   const current = wearing();
   const slots = $('gear-slots');
   slots.replaceChildren();
+  const text = $('gear-text');
+  const showWorn = () => {
+    const worn = Object.values(current).map((id) => gearDef(id!)!);
+    text.textContent = worn.length ? worn.map((g) => `${g.name}: ${g.text}`).join(' ') : 'No gear on. Pick from what you\'ve unlocked.';
+  };
   for (const slot of ['head', 'shirt', 'pants'] as GearSlot[]) {
-    const label = document.createElement('label');
+    const label = document.createElement('span');
+    label.className = 'gear-slot-name';
     label.textContent = SLOT_NAMES[slot];
-    const select = document.createElement('select');
-    select.setAttribute('aria-label', `${SLOT_NAMES[slot]} gear`);
-    select.append(new Option('Nothing', ''));
-    for (const g of GEAR.filter((d) => d.slot === slot)) {
-      const opt = new Option(unlocked(g.id) ? g.name : `${g.name} (locked)`, g.id);
-      opt.disabled = !unlocked(g.id);
-      select.append(opt);
+    const row = document.createElement('div');
+    row.className = 'gear-row';
+    row.setAttribute('role', 'radiogroup');
+    row.setAttribute('aria-label', `${SLOT_NAMES[slot]} gear`);
+    const options: (string | undefined)[] = [undefined, ...GEAR.filter((d) => d.slot === slot).map((d) => d.id)];
+    for (const id of options) {
+      const def = id ? gearDef(id) : undefined;
+      const locked = def ? !unlocked(def.id) : false;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'gear-item' + ((current[slot] ?? undefined) === id ? ' selected' : '') + (locked ? ' locked' : '');
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-checked', String((current[slot] ?? undefined) === id));
+      btn.setAttribute('aria-label', def ? `${def.name}${locked ? ' (locked)' : ''}` : 'Nothing');
+      btn.title = gearDescription(id, slot);
+      const img = document.createElement('img');
+      img.src = gearIcon((id as GearId | undefined) ?? 'none');
+      img.alt = '';
+      btn.append(img);
+      if (locked) {
+        const lock = document.createElement('span');
+        lock.className = 'lock';
+        lock.textContent = '🔒';
+        btn.append(lock);
+      }
+      btn.addEventListener('mouseenter', () => (text.textContent = gearDescription(id, slot)));
+      btn.addEventListener('focus', () => (text.textContent = gearDescription(id, slot)));
+      btn.addEventListener('mouseleave', showWorn);
+      btn.addEventListener('click', () => {
+        if (locked) {
+          text.textContent = gearDescription(id, slot);
+          return;
+        }
+        const next: Loadout = { ...wearing() };
+        if (id) next[slot] = id as GearId;
+        else delete next[slot];
+        setWearing(next);
+        sendGear();
+        renderGear();
+      });
+      row.append(btn);
     }
-    select.value = current[slot] ?? '';
-    select.addEventListener('change', () => {
-      const next: Loadout = { ...wearing() };
-      if (select.value) next[slot] = select.value as never;
-      else delete next[slot];
-      setWearing(next);
-      sendGear();
-      renderGear();
-    });
-    slots.append(label, select);
+    slots.append(label, row);
   }
-  const worn = Object.values(current).map((id) => gearDef(id!)!);
-  $('gear-text').textContent = worn.length ? worn.map((g) => `${g.name}: ${g.text}`).join(' ') : 'No gear yet: unlock some by playing.';
+  showWorn();
   const locked = GEAR.filter((g) => !unlocked(g.id));
   $('gear-locked').hidden = locked.length === 0;
   $('gear-unlocks').replaceChildren(
