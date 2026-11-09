@@ -6,3 +6,4 @@ export * from './sim';
 export * from './protocol';
 export * from './light';
 export * from './beam';
+export * from './talents';

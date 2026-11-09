@@ -19,6 +19,9 @@ import {
   packTunnels,
   digVerdict,
   runSummary,
+  learnTalent,
+  packParty,
+  type TalentId,
   step,
   type Action,
   type GameState,
@@ -143,6 +146,10 @@ export class Room {
     if (this.game) queueIntent(this.game, memberId, seq, action);
   }
 
+  learn(memberId: string, talent: TalentId): void {
+    if (this.game) learnTalent(this.game, memberId, talent);
+  }
+
   checkDig(memberId: string, dir: 'n' | 's' | 'e' | 'w'): void {
     const m = this.members.get(memberId);
     if (!this.game || !m?.peer) return;
@@ -176,6 +183,8 @@ export class Room {
     const heartCharge = game.hearts.map((h) => Math.round(h.charge * 10) / 10);
     const mirrors = packMirrors(game);
     const summary = game.runOver || game.runWon ? runSummary(game) : null;
+    const traps = [...game.revealedTraps];
+    const party = packParty(game);
     for (const m of this.members.values()) {
       const p = game.players.get(m.id);
       if (!m.peer || !p) continue;
@@ -185,7 +194,7 @@ export class Room {
         ack: p.lastAck,
         pos,
         tiles,
-        traps: game.newlyRevealed,
+        traps,
         heartCharge,
         open: game.exitOpen,
         runOver: game.runOver,
@@ -195,6 +204,7 @@ export class Room {
         intro: Math.max(0, game.introUntil - game.tick),
         tunnels: packTunnels(game),
         summary,
+        party,
       });
     }
   }
@@ -256,6 +266,7 @@ export class Room {
       intro: Math.max(0, game.introUntil - game.tick),
       tunnels: packTunnels(game),
       summary: game.runOver || game.runWon ? runSummary(game) : null,
+      party: packParty(game),
     });
   }
 

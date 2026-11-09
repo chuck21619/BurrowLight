@@ -15,6 +15,12 @@ import {
   computeLight,
   setLantern,
   MAX_OIL,
+  learnTalent,
+  lightSources,
+  traceBeamSplit,
+  QUICK_PAWS_DIG_TICKS,
+  SHARE_FLAME_OIL,
+  type TalentId,
   FINAL_FLOOR,
   runSummary,
   actName,
@@ -506,7 +512,7 @@ describe('sunbeams and mirrors', () => {
       const a = game.players.get('a')!;
       a.x = wrong % map.w;
       a.y = Math.floor(wrong / map.w);
-      queueIntent(game, 'a', 1, { kind: 'rotate' });
+      queueIntent(game, 'a', 1, { kind: 'interact' });
       step(game);
       expect(game.mirrors.get(wrong)).not.toBe(map.mirrors.find((m) => m.y * map.w + m.x === wrong)!.orient);
       // Standing on the mirror blocks the beam, so step off it (anywhere away from the path).
@@ -1066,3 +1072,183 @@ describe('winning and the run summary', () => {
     expect(actName(9)).toBe("Giant's Kitchen");
   });
 });
+
+describe('talents', () => {
+  const party = () => {
+    const game = createGame(7, [
+      { id: 'a', name: 'A', color: 1 },
+      { id: 'b', name: 'B', color: 2 },
+    ]);
+    game.map.sunshafts = [];
+    game.map.emitters = [];
+    for (const k of game.torches.keys()) game.torches.set(k, false);
+    return game;
+  };
+  const give = (game: ReturnType<typeof party>, id: string, ...talents: TalentId[]) => {
+    const p = game.players.get(id)!;
+    for (const t of talents) {
+      p.points++;
+      expect(learnTalent(game, id, t)).toBeNull();
+    }
+    return p;
+  };
+
+  it('a point for every floor the party goes down; roots before branches; no double-learning', () => {
+    const game = party();
+    const a = game.players.get('a')!;
+    expect(a.points).toBe(0);
+    expect(learnTalent(game, 'a', 'brightWick')).toBe('No talent points');
+    game.exitOpen = true;
+    for (const p of game.players.values()) {
+      p.x = game.map.stairs.x;
+      p.y = game.map.stairs.y;
+    }
+    step(game);
+    expect(a.points).toBe(1);
+    expect(learnTalent(game, 'a', 'prism')).toMatch(/Needs Bright Wick/);
+    expect(learnTalent(game, 'a', 'brightWick')).toBeNull();
+    expect(a.points).toBe(0);
+    a.points = 1;
+    expect(learnTalent(game, 'a', 'brightWick')).toBe('Already learned');
+  });
+
+  it('Bright Wick widens your light; Thrifty Wick halves your oil burn', () => {
+    const game = party();
+    const a = give(game, 'a', 'brightWick', 'thriftyWick');
+    expect(lightSources(game).length).toBe(0);
+    setLantern(game, 'a', true);
+    expect(lightSources(game)[0]!.radius).toBe(6);
+    const oil = a.oil;
+    for (let i = 0; i < 10; i++) step(game);
+    expect(oil - a.oil).toBe(5);
+  });
+
+  it('Deep Pockets gives an extra brace now and on every floor; Quick Paws digs in 1 s; Stonebreaker digs from paved stone', () => {
+    const { game, a, dir, plan } = withSoilSpot();
+    give(game, 'a', 'deepPockets');
+    expect(a.braces).toBe(BURROW_BRACES_PER_FLOOR + 1);
+    give(game, 'a', 'quickPaws');
+    queueIntent(game, 'a', 1, { kind: 'dig', dir });
+    step(game);
+    for (let i = 0; i < QUICK_PAWS_DIG_TICKS; i++) step(game);
+    expect(game.tunnels.length).toBe(1);
+    expect(a.y * game.map.w + a.x).toBe(plan.b);
+    // Paved stone underfoot: only with Stonebreaker.
+    game.map.tiles[plan.b] = Tile.StoneFloor;
+    game.tunnels = [];
+    expect(planTunnel(game, a.x, a.y, opposite(dir))).toBeNull();
+    give(game, 'a', 'stonebreaker');
+    expect(planTunnel(game, a.x, a.y, opposite(dir), true)).not.toBeNull();
+  });
+
+  it('Disarm removes a trap you can see next to you; Trap Sense reveals close traps in the dark', () => {
+    const game = party();
+    const a = give(game, 'a', 'disarm', 'trapSense');
+    const dir = findOpenDir(game, 'a');
+    const t = (a.y + DIRS[dir][1]) * game.map.w + a.x + DIRS[dir][0];
+    game.traps.add(t);
+    step(game);
+    expect(game.revealedTraps.has(t)).toBe(true); // sensed in the dark
+    queueIntent(game, 'a', 1, { kind: 'interact' });
+    step(game);
+    expect(game.traps.has(t)).toBe(false);
+  });
+
+  it('Mend wakes a dazed friend; Share the Flame gives them 15 s of oil', () => {
+    const game = party();
+    const a = give(game, 'a', 'mend', 'shareFlame');
+    const b = game.players.get('b')!;
+    b.x = a.x;
+    b.y = a.y;
+    b.koUntil = game.tick + 100;
+    queueIntent(game, 'a', 1, { kind: 'interact' });
+    step(game);
+    expect(b.koUntil).toBeLessThanOrEqual(game.tick);
+    b.oil = 100;
+    const aOil = a.oil;
+    for (let i = 0; i < 3; i++) step(game);
+    queueIntent(game, 'a', 2, { kind: 'interact' });
+    step(game);
+    expect(b.oil).toBe(100 + SHARE_FLAME_OIL);
+    expect(a.oil).toBe(aOil - SHARE_FLAME_OIL);
+  });
+
+  it('Soothe: friends within 2 tiles fill the Jitters at half speed, even alone', () => {
+    const game = party();
+    const [a, b] = [game.players.get('a')!, game.players.get('b')!];
+    // Find two walkable tiles exactly 2 apart, away from any light.
+    const { map } = game;
+    let spot: [number, number, number, number] | null = null;
+    for (let i = 0; i < map.tiles.length && !spot; i++) {
+      if (!isWalkable(map.tiles[i]!)) continue;
+      const x = i % map.w;
+      const y = Math.floor(i / map.w);
+      if (isWalkable(tileAt(map, x + 2, y))) spot = [x, y, x + 2, y];
+    }
+    a.x = spot![0];
+    a.y = spot![1];
+    b.x = spot![2];
+    b.y = spot![3];
+    step(game);
+    expect(a.jitters).toBe(JITTERS_DARK); // no Soothe yet: full speed alone
+    give(game, 'b', 'mend', 'soothe');
+    a.jitters = 0;
+    step(game);
+    expect(a.jitters).toBe(JITTERS_DARK_WITH_FRIEND); // B's Soothe reaches 2 tiles
+  });
+
+  it('Mirror Pack: set your mirror down with R on empty floor, pick it back up; Prism splits a sunbeam', () => {
+    const game = party();
+    const a = give(game, 'a', 'disarm', 'mirrorPack');
+    expect(a.mirror).toBe(true);
+    const here = a.y * game.map.w + a.x;
+    game.map.tiles[here] = Tile.Floor;
+    queueIntent(game, 'a', 1, { kind: 'mirror' });
+    step(game);
+    expect(game.mirrors.has(here)).toBe(true);
+    expect(a.mirror).toBe(false);
+    for (let i = 0; i < 3; i++) step(game);
+    queueIntent(game, 'a', 2, { kind: 'mirror' });
+    step(game);
+    expect(game.mirrors.has(here)).toBe(false);
+    expect(a.mirror).toBe(true);
+
+    // Prism: a beam hitting a Prism critter carries on both ways at right angles.
+    const room = asciiMap(['#######', '#.....#', '#.....#', '#.....#', '#######']);
+    const cell = (x: number, y: number) => beamCellOf(room.tiles[y * room.w + x] ?? Tile.Wall);
+    const at = (x: number, y: number) => y * room.w + x;
+    const segs = traceBeamSplit(room.w, room.h, cell, { x: 1, y: 2, dx: 1, dy: 0 }, () => undefined, (i) => i === at(3, 2), (i) => i === at(3, 2));
+    const lit = new Set(segs.flat());
+    expect(lit.has(at(3, 1))).toBe(true);
+    expect(lit.has(at(3, 3))).toBe(true);
+    expect(lit.has(at(4, 2))).toBe(false); // the beam stops going straight
+  });
+});
+
+const opposite = (d: 'n' | 's' | 'e' | 'w') => ({ n: 's', s: 'n', e: 'w', w: 'e' } as const)[d];
+
+/** A game with a critter standing where it can dig, without traps in the way. */
+function withSoilSpot() {
+  for (let seed = 1; seed < 200; seed++) {
+    const game = createGame(seed, [
+      { id: 'a', name: 'A', color: 1 },
+      { id: 'b', name: 'B', color: 2 },
+    ]);
+    const { map } = game;
+    game.traps.clear();
+    for (let i = 0; i < map.tiles.length; i++) {
+      if (map.tiles[i] !== Tile.Floor) continue;
+      const x = i % map.w;
+      const y = Math.floor(i / map.w);
+      for (const dir of ['n', 's', 'e', 'w'] as const) {
+        const plan = planTunnel(game, x, y, dir);
+        if (!plan) continue;
+        const a = game.players.get('a')!;
+        a.x = x;
+        a.y = y;
+        return { game, a, dir, plan };
+      }
+    }
+  }
+  throw new Error('no dig spot');
+}

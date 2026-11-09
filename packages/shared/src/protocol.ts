@@ -1,5 +1,6 @@
 import type { Action } from './rules';
 import type { RunSummary } from './sim';
+import type { TalentId } from './talents';
 
 // ---- Client -> server ----
 export type ClientMessage =
@@ -11,7 +12,12 @@ export type ClientMessage =
   | { t: 'intent'; seq: number; action: Action }
   | { t: 'lantern'; on: boolean }
   /** Ask whether a dig in `dir` would work, before asking the player to spend a brace. */
-  | { t: 'checkDig'; dir: 'n' | 's' | 'e' | 'w' };
+  | { t: 'checkDig'; dir: 'n' | 's' | 'e' | 'w' }
+  /** Spend a talent point. */
+  | { t: 'learn'; talent: TalentId };
+
+/** Each critter's talents: [id, talents learned, unspent points, carrying a Mirror Pack mirror]. */
+export type PartyTalents = [id: string, talents: TalentId[], points: number, mirror: 0 | 1][];
 
 // ---- Server -> client ----
 export interface LobbyPlayer {
@@ -91,6 +97,7 @@ export type ServerMessage =
       tunnels: [number, number, string][];
       /** Set once the run has ended (won or lost). */
       summary: RunSummary | null;
+      party: PartyTalents;
     }
   | {
       t: 'tick';
@@ -100,7 +107,7 @@ export type ServerMessage =
       pos: PlayerPos[];
       /** Flat [index, type, ...] of tiles explored this tick. */
       tiles: number[];
-      /** Traps revealed this tick. */
+      /** Every trap the party can see right now (disarmed ones drop off). */
       traps: number[];
       heartCharge: number[];
       open: boolean;
@@ -112,6 +119,7 @@ export type ServerMessage =
       intro: number;
       tunnels: [number, number, string][];
       summary: RunSummary | null;
+      party: PartyTalents;
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

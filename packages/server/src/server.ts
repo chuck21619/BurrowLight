@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { isAction, isCardinal, normalizeCode, sanitizeName, type ClientMessage } from '@burrowlight/shared';
+import { isAction, isCardinal, isTalentId, normalizeCode, sanitizeName, type ClientMessage } from '@burrowlight/shared';
 import { EMPTY_ROOM_TTL_MS, Room, makeRoomCode, send } from './room';
 
 const MAX_MESSAGES_PER_SECOND = 20;
@@ -101,6 +101,9 @@ export function startServer(port: number): Promise<RunningServer> {
           if (err) fail(err);
           return;
         }
+        case 'learn':
+          if (room && memberId && isTalentId(msg.talent)) room.learn(memberId, msg.talent);
+          return;
         case 'checkDig':
           if (room && memberId && isCardinal(msg.dir)) room.checkDig(memberId, msg.dir);
           return;

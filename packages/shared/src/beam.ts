@@ -51,3 +51,43 @@ export function traceBeam(
   }
   return out;
 }
+
+/**
+ * Like `traceBeam`, but a critter with Prism doesn't stop the beam: it splits it into two beams at
+ * right angles, which carry on from that critter's tile. Returns every beam segment (the first starts
+ * at the emitter); each segment lists its lit tiles in order.
+ */
+export function traceBeamSplit(
+  w: number,
+  h: number,
+  cell: (x: number, y: number) => BeamCell,
+  e: Emitter,
+  mirrorAt: (i: number) => MirrorOrient | undefined,
+  blocked: (i: number) => boolean,
+  prismAt: (i: number) => boolean,
+): number[][] {
+  const segments: number[][] = [];
+  const started = new Set<number>();
+  const queue: Emitter[] = [e];
+  while (queue.length && segments.length < 64) {
+    const start = queue.shift()!;
+    const key = (start.y * w + start.x) * 8 + (start.dx + 1) + (start.dy + 1) * 3;
+    if (started.has(key)) continue;
+    started.add(key);
+    const isEmitter = segments.length === 0;
+    // A split beam starts on the prism critter's tile, so that tile doesn't block it.
+    const path = traceBeam(w, h, cell, start, mirrorAt, (i) => (isEmitter || i !== start.y * w + start.x) && blocked(i));
+    segments.push(path);
+    const end = path[path.length - 1]!;
+    if (path.length > 1 && blocked(end) && prismAt(end) && cell(end % w, Math.floor(end / w)) === 'open') {
+      // Work out the heading the beam arrived with, then branch at right angles.
+      const prev = path[path.length - 2]!;
+      const dx = (end % w) - (prev % w);
+      const dy = Math.floor(end / w) - Math.floor(prev / w);
+      const x = end % w;
+      const y = Math.floor(end / w);
+      queue.push({ x, y, dx: dy, dy: dx }, { x, y, dx: -dy, dy: -dx });
+    }
+  }
+  return segments;
+}

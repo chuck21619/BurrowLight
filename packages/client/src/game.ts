@@ -13,8 +13,11 @@ import {
   alliesNeverBlock,
   beamCellOf,
   computeLight,
-  traceBeam,
+  traceBeamSplit,
+  BRIGHT_WICK_RADIUS,
   type Emitter,
+  type PartyTalents,
+  type TalentId,
   type MirrorOrient,
   hashSeed,
   isDiagonal,
@@ -197,7 +200,12 @@ export class GameView {
   private keys = new Set<string>();
   private lastKeyDown = 0;
   private waitRequested = false;
-  private rotateRequested = false;
+  private interactRequested = false;
+  private mirrorRequested = false;
+  /** Everyone's talents, unspent points and Mirror Pack state, by critter id. */
+  private party = new Map<string, { talents: Set<TalentId>; points: number; mirror: boolean }>();
+  /** Fired when anyone's talents or points change. */
+  onPartyTalents: (party: Map<string, { talents: Set<TalentId>; points: number; mirror: boolean }>, you: string) => void = () => {};
   /** One buffered key tap, so quick taps (or a tap while busy) are never lost. */
   private tapped: Dir | null = null;
 
@@ -267,6 +275,7 @@ export class GameView {
     this.setTunnels(msg.tunnels);
     this.intro = msg.intro;
     this.markerLayer.addChild(this.beamGfx);
+    this.setParty(msg.party);
 
     this.hearts = msg.hearts.map((idx, k) => {
       const bar = new Graphics();
@@ -305,7 +314,8 @@ export class GameView {
   applyTick(msg: Tick): void {
     this.serverTick = msg.tick;
     this.addTiles(msg.tiles);
-    for (const t of msg.traps) this.addTrap(t);
+    this.setTraps(msg.traps);
+    this.setParty(msg.party);
     msg.heartCharge.forEach((c, k) => {
       const heart = this.hearts[k];
       if (heart && heart.charge !== c) {
@@ -510,6 +520,39 @@ export class GameView {
     this.lightDirty = true;
   }
 
+  /** The full list of traps the party can see: add new ones, drop disarmed ones. */
+  private setTraps(list: number[]): void {
+    const keep = new Set(list);
+    for (const t of list) this.addTrap(t);
+    for (const [i, s] of this.trapSprites) {
+      if (keep.has(i)) continue;
+      s.destroy();
+      this.trapSprites.delete(i);
+      this.traps.delete(i);
+      this.lightDirty = true;
+    }
+  }
+
+  private setParty(list: PartyTalents): void {
+    let changed = false;
+    for (const [id, talents, points, mirror] of list) {
+      const cur = this.party.get(id);
+      const key = `${talents.join(',')}|${points}|${mirror}`;
+      const was = cur ? `${[...cur.talents].join(',')}|${cur.points}|${cur.mirror ? 1 : 0}` : '';
+      if (key === was) continue;
+      this.party.set(id, { talents: new Set(talents), points, mirror: mirror === 1 });
+      changed = true;
+    }
+    if (changed) {
+      this.lightDirty = true;
+      this.onPartyTalents(this.party, this.you);
+    }
+  }
+
+  private has(id: string, talent: TalentId): boolean {
+    return this.party.get(id)?.talents.has(talent) ?? false;
+  }
+
   private setOpen(open: boolean): void {
     if (open === this.open) return;
     this.open = open;
@@ -609,7 +652,11 @@ export class GameView {
       return;
     }
     if (e.code === 'KeyE') {
-      if (!e.repeat) this.rotateRequested = true;
+      if (!e.repeat) this.interactRequested = true;
+      return;
+    }
+    if (e.code === 'KeyR') {
+      if (!e.repeat) this.mirrorRequested = true;
       return;
     }
     if (e.code === 'KeyQ') {
@@ -730,9 +777,12 @@ export class GameView {
         return;
       }
     }
-    if (this.rotateRequested) {
-      this.rotateRequested = false;
-      action = { kind: 'rotate' };
+    if (this.interactRequested) {
+      this.interactRequested = false;
+      action = { kind: 'interact' };
+    } else if (this.mirrorRequested) {
+      this.mirrorRequested = false;
+      action = { kind: 'mirror' };
     } else if (this.burrowRequested) {
       this.burrowRequested = false;
       action = { kind: 'burrow' };
@@ -808,7 +858,7 @@ export class GameView {
     const sources: LightSource[] = [];
     for (const [id, a] of this.avatars) {
       const lit = id === this.you ? this.myLit && a.oil > 0 : a.lit;
-      if (lit) sources.push({ x: a.tx, y: a.ty, radius: LANTERN_RADIUS, strength: 1 });
+      if (lit) sources.push({ x: a.tx, y: a.ty, radius: this.has(id, 'brightWick') ? BRIGHT_WICK_RADIUS : LANTERN_RADIUS, strength: 1 });
     }
     for (const i of this.sunshafts) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: SUNSHAFT_RADIUS, strength: 1 });
     for (const [i, on] of this.torches) if (on) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: TORCH_RADIUS, strength: 1 });
@@ -817,16 +867,19 @@ export class GameView {
     const occupied = new Set<number>();
     for (const a of this.avatars.values()) occupied.add(a.ty * this.w + a.tx);
     if (this.gloom) for (const i of gloomFootprint(this.w, this.gloom.x, this.gloom.y)) occupied.add(i);
+    const prisms = new Set<number>();
+    for (const [id, a] of this.avatars) if (this.has(id, 'prism')) prisms.add(a.ty * this.w + a.tx);
     const beams = this.emitters
       .filter((e) => this.tiles[e.y * this.w + e.x] !== UNKNOWN)
-      .map((e) =>
-        traceBeam(
+      .flatMap((e) =>
+        traceBeamSplit(
           this.w,
           this.h,
           (x, y) => beamCellOf(this.knownTile(x, y)),
           e,
           (i) => this.mirrors.get(i),
           (i) => occupied.has(i),
+          (i) => prisms.has(i),
         ),
       );
     const light = computeLight(this.w, this.h, this.knownTile, sources, beams, BEAM_STRENGTH);

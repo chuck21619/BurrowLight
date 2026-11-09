@@ -1,4 +1,18 @@
-import { MAX_OIL, actName, actOf, isBossFloor, normalizeCode, type LobbyPlayer, type RunSummary, type ServerMessage } from '@burrowlight/shared';
+import {
+  MAX_OIL,
+  TALENTS,
+  TREES,
+  actName,
+  actOf,
+  isBossFloor,
+  learnProblem,
+  normalizeCode,
+  talentDef,
+  type LobbyPlayer,
+  type RunSummary,
+  type ServerMessage,
+  type TalentId,
+} from '@burrowlight/shared';
 import { GameView } from './game';
 import { Net } from './net';
 
@@ -203,6 +217,18 @@ game.onPartyChange = (players) => {
       top.className = 'member-top';
       top.append(name, brace);
       text.append(top, bar, jit);
+      const known = partyTalents.get(info.id);
+      if (known && known.size) {
+        const chips = document.createElement('div');
+        chips.className = 'chips';
+        for (const t of known) {
+          const c = document.createElement('span');
+          c.className = 'chip';
+          c.textContent = talentDef(t)!.name;
+          chips.append(c);
+        }
+        text.append(chips);
+      }
       li.append(dot, text);
       return li;
     }),
@@ -255,6 +281,71 @@ $('again').addEventListener('click', () => {
   }
   location.href = location.pathname;
 });
+
+// ---------- Talents ----------
+
+let myTalents = new Set<TalentId>();
+let myPoints = 0;
+let partyTalents = new Map<string, Set<TalentId>>();
+
+function renderTalentMenu() {
+  $('talent-points').textContent =
+    myPoints > 0 ? `${myPoints} talent point${myPoints > 1 ? 's' : ''} to spend` : 'No points: you earn one each floor you go down';
+  $('talent-trees').replaceChildren(
+    ...TREES.map((tree) => {
+      const col = document.createElement('div');
+      col.className = 'tree';
+      const h = document.createElement('h3');
+      h.textContent = tree.name;
+      col.append(h);
+      const inTree = TALENTS.filter((t) => t.tree === tree.id);
+      const root = inTree.find((t) => !t.requires)!;
+      const branches = inTree.filter((t) => t.requires);
+      const button = (id: TalentId) => {
+        const def = talentDef(id)!;
+        const b = document.createElement('button');
+        const learned = myTalents.has(id);
+        const problem = learnProblem(myTalents, myPoints, id);
+        b.className = `talent ${learned ? 'learned' : problem ? 'locked' : 'available'}`;
+        b.disabled = learned || !!problem;
+        b.title = learned ? 'Learned' : (problem ?? 'Learn this talent');
+        const name = document.createElement('strong');
+        name.textContent = def.name;
+        const text = document.createElement('span');
+        text.textContent = def.text;
+        b.append(name, text);
+        b.addEventListener('click', () => net.send({ t: 'learn', talent: id }));
+        return b;
+      };
+      const row = document.createElement('div');
+      row.className = 'branches';
+      row.append(...branches.map((t) => button(t.id)));
+      col.append(button(root.id), row);
+      return col;
+    }),
+  );
+}
+
+function toggleTalents(open = $('talents').hidden) {
+  $('talents').hidden = !open;
+  if (open) renderTalentMenu();
+}
+window.addEventListener('keydown', (e) => {
+  if (screen !== 'game' || e.target instanceof HTMLInputElement) return;
+  if (e.code === 'KeyT' && !e.repeat) toggleTalents();
+  if (e.code === 'Escape') toggleTalents(false);
+});
+$('talents-close').addEventListener('click', () => toggleTalents(false));
+
+game.onPartyTalents = (party, you) => {
+  const mine = party.get(you);
+  myTalents = new Set(mine?.talents ?? []);
+  myPoints = mine?.points ?? 0;
+  partyTalents = new Map([...party].map(([id, p]) => [id, p.talents]));
+  $('point-hint').hidden = myPoints <= 0;
+  $('point-hint').textContent = `${myPoints} talent point${myPoints > 1 ? 's' : ''}: press T`;
+  if (!$('talents').hidden) renderTalentMenu();
+};
 
 let floorText = '';
 game.onObjective = ({ charged, total, open, gloom, pinned, intro }) => {

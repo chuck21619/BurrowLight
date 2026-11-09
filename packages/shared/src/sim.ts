@@ -1,7 +1,17 @@
-import { traceBeam, type MirrorOrient } from './beam';
+import { traceBeamSplit, type MirrorOrient } from './beam';
+import {
+  BRIGHT_WICK_RADIUS,
+  QUICK_PAWS_DIG_TICKS,
+  SHARE_FLAME_OIL,
+  SOOTHE_RADIUS,
+  TRAP_SENSE_RADIUS,
+  learnProblem,
+  type TalentId,
+} from './talents';
 import { computeLight, type LightMap, type LightSource } from './light';
 import {
   MAX_TUNNEL_SOIL,
+  Tile,
   beamCellOf,
   canTunnelUnder,
   isDiggableGround,
@@ -93,6 +103,12 @@ export interface PlayerState {
   digging: { until: number; a: number; b: number } | null;
   /** Burrow braces left on this floor: each one shores up one tunnel. */
   braces: number;
+  /** Talents learned this run. */
+  talents: Set<TalentId>;
+  /** Unspent talent points (one per floor the party goes down). */
+  points: number;
+  /** Mirror Pack: carrying the mirror (rather than having set it down). */
+  mirror: boolean;
 }
 
 /** A tunnel under soft soil, between two floor tiles. Permanent, and anyone can use it. */
@@ -172,6 +188,8 @@ export interface GameState {
   introTorch: number;
   /** Every tunnel dug on this floor. */
   tunnels: Tunnel[];
+  /** Mirrors set down with Mirror Pack: tile index -> who placed it. */
+  placedMirrors: Map<number, string>;
 }
 
 export interface RunStats {
@@ -254,8 +272,13 @@ export function createGame(seed: number, players: NewPlayer[], startFloor = 1): 
       gloomTouchAt: -Infinity,
       digging: null,
       braces: BURROW_BRACES_PER_FLOOR,
+      talents: new Set(),
+      points: 0,
+      mirror: false,
     });
   });
+  // Starting deeper (a testing option) comes with the points you'd have earned on the way down.
+  for (const p of state.players.values()) p.points = startFloor - 1;
   enterFloor(state, startFloor);
   return state;
 }
@@ -292,9 +315,11 @@ function enterFloor(state: GameState, n: number): void {
   state.mirrors = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
   state.torches = new Map(map.torches.map((t) => [t.y * map.w + t.x, t.lit]));
   state.tunnels = [];
+  state.placedMirrors = new Map();
   for (const p of state.players.values()) {
     p.digging = null;
-    p.braces = BURROW_BRACES_PER_FLOOR;
+    p.braces = BURROW_BRACES_PER_FLOOR + (p.talents.has('deepPockets') ? 1 : 0);
+    p.mirror = p.talents.has('mirrorPack'); // a placed mirror stays behind; you start each floor with it
   }
   state.introTorch = map.introTorch ? map.introTorch.y * map.w + map.introTorch.x : -1;
   state.introUntil = map.introTorch ? state.tick + BOSS_INTRO_MAX : 0;
@@ -386,10 +411,11 @@ export function step(state: GameState, opts: StepOptions = {}): void {
         }
       }
     } else if (action.kind === 'dig') {
-      const plan = p.braces > 0 ? planTunnel(state, p.x, p.y, action.dir) : null;
+      const plan = p.braces > 0 ? planTunnel(state, p.x, p.y, action.dir, p.talents.has('stonebreaker')) : null;
       if (plan) {
-        p.digging = { until: state.tick + actionCost(action, p.speed), ...plan };
-        cost = actionCost(action, p.speed);
+        const digTime = p.talents.has('quickPaws') ? QUICK_PAWS_DIG_TICKS : actionCost(action, p.speed);
+        p.digging = { until: state.tick + digTime, ...plan };
+        cost = digTime;
       } else {
         cost = ActionCost.blockedMove;
       }
@@ -403,11 +429,11 @@ export function step(state: GameState, opts: StepOptions = {}): void {
         p.y = Math.floor(to / state.map.w);
       }
       cost = actionCost(action, p.speed);
-    } else if (action.kind === 'rotate') {
-      // Turn the mirror you're standing on.
-      const here = p.y * state.map.w + p.x;
-      const m = state.mirrors.get(here);
-      if (m !== undefined) state.mirrors.set(here, (1 - m) as MirrorOrient);
+    } else if (action.kind === 'interact') {
+      interact(state, p);
+      cost = actionCost(action, p.speed);
+    } else if (action.kind === 'mirror') {
+      useMirrorPack(state, p);
       cost = actionCost(action, p.speed);
     } else {
       cost = actionCost(action, p.speed);
@@ -445,6 +471,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
 
   for (const p of order) {
     if (!p.lit) continue;
+    if (p.talents.has('thriftyWick') && state.tick % 2 === 1) continue; // half the burn
     p.oil = Math.max(0, p.oil - OIL_PER_TICK);
     state.stats.oilBurned += OIL_PER_TICK;
     if (p.oil === 0) p.lit = false;
@@ -481,7 +508,10 @@ export function step(state: GameState, opts: StepOptions = {}): void {
         state.runWon = true; // the Hearthlight is restored
         return;
       }
-      for (const p of order) p.oil = Math.min(MAX_OIL, p.oil + OIL_PER_FLOOR);
+      for (const p of order) {
+        p.oil = Math.min(MAX_OIL, p.oil + OIL_PER_FLOOR);
+        p.points++; // a talent point for every floor the party goes down
+      }
       enterFloor(state, state.floor + 1);
       state.descended = true;
     }
@@ -500,7 +530,9 @@ function updateJitters(state: GameState, order: PlayerState[]): void {
     if (level[p.y * w + p.x]! > 0) {
       p.jitters = Math.max(0, p.jitters - JITTERS_CALM);
     } else {
-      const friend = order.some((q) => q !== p && Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= 1);
+      const near = (q: PlayerState, r: number) => q !== p && Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= r;
+      // A friend right next to you, or a Soothe friend within 2 tiles, halves the Jitters.
+      const friend = order.some((q) => near(q, 1) || (q.talents.has('soothe') && near(q, SOOTHE_RADIUS)));
       p.jitters = Math.min(JITTERS_MAX, p.jitters + (friend ? JITTERS_DARK_WITH_FRIEND : JITTERS_DARK));
     }
     if (!p.panic && p.jitters >= JITTERS_MAX) {
@@ -546,7 +578,8 @@ export const alliesNeverBlock = (_x: number, _y: number): boolean => false;
 
 export function lightSources(state: GameState): LightSource[] {
   const out: LightSource[] = [];
-  for (const p of state.players.values()) if (p.lit) out.push({ x: p.x, y: p.y, radius: LANTERN_RADIUS, strength: 1 });
+  for (const p of state.players.values())
+    if (p.lit) out.push({ x: p.x, y: p.y, radius: p.talents.has('brightWick') ? BRIGHT_WICK_RADIUS : LANTERN_RADIUS, strength: 1 });
   for (const s of state.map.sunshafts) out.push({ x: s.x, y: s.y, radius: SUNSHAFT_RADIUS, strength: 1 });
   for (const [i, on] of state.torches) if (on) out.push({ x: i % state.map.w, y: Math.floor(i / state.map.w), radius: TORCH_RADIUS, strength: 1 });
   return out;
@@ -751,14 +784,17 @@ export function traceBeams(state: GameState): number[][] {
   const occupied = new Set<number>();
   for (const p of state.players.values()) occupied.add(p.y * map.w + p.x);
   if (state.gloom) for (const i of gloomFootprint(map.w, state.gloom.x, state.gloom.y)) occupied.add(i);
-  return map.emitters.map((e) =>
-    traceBeam(
+  const prisms = new Set<number>();
+  for (const p of state.players.values()) if (p.talents.has('prism')) prisms.add(p.y * map.w + p.x);
+  return map.emitters.flatMap((e) =>
+    traceBeamSplit(
       map.w,
       map.h,
       (x, y) => beamCellOf(tileAt(map, x, y)),
       e,
       (i) => state.mirrors.get(i),
       (i) => occupied.has(i),
+      (i) => prisms.has(i),
     ),
   );
 }
@@ -777,6 +813,12 @@ function updateLight(state: GameState): void {
     }
     if (state.traps.has(i)) reveal(state, i);
   }
+  // Trap Sense: traps close by show up even in the dark.
+  for (const p of state.players.values()) {
+    if (!p.talents.has('trapSense')) continue;
+    for (const t of state.traps)
+      if (Math.max(Math.abs((t % map.w) - p.x), Math.abs(Math.floor(t / map.w) - p.y)) <= TRAP_SENSE_RADIUS) reveal(state, t);
+  }
 }
 
 function reveal(state: GameState, i: number): void {
@@ -792,17 +834,24 @@ export const heartIndex = (state: GameState, h: { x: number; y: number }): numbe
  * up into dirt ground on the other side. Null if you're on paved stone, there's no wall, it's too
  * thick, or the far side isn't dirt.
  */
-export function planTunnel(state: GameState, x: number, y: number, dir: 'n' | 's' | 'e' | 'w'): { a: number; b: number } | null {
+export function planTunnel(
+  state: GameState,
+  x: number,
+  y: number,
+  dir: 'n' | 's' | 'e' | 'w',
+  stonebreaker = false,
+): { a: number; b: number } | null {
+  const ground = (t: number) => isDiggableGround(t) || (stonebreaker && t === Tile.StoneFloor);
   const [dx, dy] = DIRS[dir];
   const { map } = state;
   // You dig down from dirt ground, under 1–3 tiles of wall (or gate), and up into dirt ground.
-  if (!isDiggableGround(tileAt(map, x, y))) return null;
+  if (!ground(tileAt(map, x, y))) return null;
   let n = 1;
   while (n <= MAX_TUNNEL_SOIL && canTunnelUnder(tileAt(map, x + dx * n, y + dy * n))) n++;
   if (n === 1) return null; // no wall next to you
   const ox = x + dx * n;
   const oy = y + dy * n;
-  if (!isDiggableGround(tileAt(map, ox, oy))) return null;
+  if (!ground(tileAt(map, ox, oy))) return null;
   const a = y * map.w + x;
   const b = oy * map.w + ox;
   // One tunnel per spot: don't dig where a tunnel already starts or ends.
@@ -823,19 +872,106 @@ export function digVerdict(state: GameState, playerId: string, dir: 'n' | 's' | 
   const here = p.y * map.w + p.x;
   if (state.tunnels.some((t) => t.a === here || t.b === here)) return { ok: false, reason: 'Press Q to burrow through' };
   if (p.braces <= 0) return { ok: false, reason: 'No burrow braces left' };
-  if (!isDiggableGround(tileAt(map, p.x, p.y))) return { ok: false, reason: 'Paved stone: too hard to dig' };
+  const stone = p.talents.has('stonebreaker');
+  const ground = (t: number) => isDiggableGround(t) || (stone && t === Tile.StoneFloor);
+  if (!ground(tileAt(map, p.x, p.y))) return { ok: false, reason: 'Paved stone: too hard to dig' };
   const [dx, dy] = DIRS[dir];
   let n = 1;
   while (n <= MAX_TUNNEL_SOIL && canTunnelUnder(tileAt(map, p.x + dx * n, p.y + dy * n))) n++;
   if (n === 1) return { ok: false, reason: "Can't dig here" };
   const out = tileAt(map, p.x + dx * n, p.y + dy * n);
   if (canTunnelUnder(out)) return { ok: false, reason: 'Too thick to dig under' };
-  if (!isDiggableGround(out)) return { ok: false, reason: "Can't dig here" };
+  if (!ground(out)) return { ok: false, reason: "Can't dig here" };
   const a = p.y * map.w + p.x;
   const b = (p.y + dy * n) * map.w + p.x + dx * n;
   if (state.tunnels.some((t) => t.a === a || t.b === a || t.a === b || t.b === b)) return { ok: false, reason: 'Already a tunnel here' };
-  if (!planTunnel(state, p.x, p.y, dir)) return { ok: false, reason: "Can't dig here" };
+  if (!planTunnel(state, p.x, p.y, dir, stone)) return { ok: false, reason: "Can't dig here" };
   return { ok: true, reason: '' };
+}
+
+/** Learn a talent, if the critter has a point and meets its requirement. Returns why not, or null. */
+export function learnTalent(state: GameState, playerId: string, talent: TalentId): string | null {
+  const p = state.players.get(playerId);
+  if (!p) return 'No such critter';
+  const problem = learnProblem(p.talents, p.points, talent);
+  if (problem) return problem;
+  p.talents.add(talent);
+  p.points--;
+  if (talent === 'deepPockets') p.braces++; // the extra brace counts on this floor too
+  if (talent === 'mirrorPack') p.mirror = true;
+  return null;
+}
+
+const near1 = (a: PlayerState, x: number, y: number) => Math.max(Math.abs(a.x - x), Math.abs(a.y - y)) <= 1;
+
+/**
+ * E: turn the mirror you're standing on; otherwise use a talent on what's next to you, in this order:
+ * wake a dazed friend (Mend), remove a trap you can see (Disarm), give a friend oil (Share the Flame).
+ */
+function interact(state: GameState, p: PlayerState): void {
+  const { map } = state;
+  const here = p.y * map.w + p.x;
+  const m = state.mirrors.get(here);
+  if (m !== undefined) {
+    state.mirrors.set(here, (1 - m) as MirrorOrient);
+    return;
+  }
+  const friends = [...state.players.values()].filter((q) => q !== p && near1(q, p.x, p.y));
+  if (p.talents.has('mend')) {
+    const dazed = friends.find((q) => q.koUntil > state.tick);
+    if (dazed) {
+      dazed.koUntil = state.tick;
+      dazed.readyAt = state.tick;
+      return;
+    }
+  }
+  if (p.talents.has('disarm')) {
+    const trap = [...state.revealedTraps].find((t) => state.traps.has(t) && near1(p, t % map.w, Math.floor(t / map.w)));
+    if (trap !== undefined) {
+      state.traps.delete(trap);
+      state.revealedTraps.delete(trap);
+      return;
+    }
+  }
+  if (p.talents.has('shareFlame') && p.oil > 0) {
+    const friend = friends.find((q) => q.oil < MAX_OIL);
+    if (friend) {
+      const amount = Math.min(SHARE_FLAME_OIL, p.oil, MAX_OIL - friend.oil);
+      p.oil -= amount;
+      friend.oil += amount;
+      if (p.oil === 0) p.lit = false;
+    }
+  }
+}
+
+/** R: set your Mirror Pack mirror down on empty floor, or pick it back up from where you're standing. */
+function useMirrorPack(state: GameState, p: PlayerState): void {
+  if (!p.talents.has('mirrorPack')) return;
+  const { map } = state;
+  const here = p.y * map.w + p.x;
+  if (!p.mirror) {
+    if (state.placedMirrors.get(here) === p.id) {
+      state.mirrors.delete(here);
+      state.placedMirrors.delete(here);
+      p.mirror = true;
+    }
+    return;
+  }
+  const t = tileAt(map, p.x, p.y);
+  const empty =
+    (t === Tile.Floor || t === Tile.StoneFloor) &&
+    !state.mirrors.has(here) &&
+    !state.torches.has(here) &&
+    !state.tunnels.some((tn) => tn.a === here || tn.b === here);
+  if (!empty) return;
+  state.mirrors.set(here, 0);
+  state.placedMirrors.set(here, p.id);
+  p.mirror = false;
+}
+
+/** Talents, unspent points and Mirror Pack state for every critter: [id, talents, points, carryingMirror]. */
+export function packParty(state: GameState): [string, TalentId[], number, 0 | 1][] {
+  return [...state.players.values()].map((p) => [p.id, [...p.talents], p.points, p.mirror ? 1 : 0]);
 }
 
 /** Tunnels as [endA, endB, ownerId] triples. */

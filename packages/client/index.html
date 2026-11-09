@@ -44,12 +44,25 @@
         <ul id="party"></ul>
         <div id="banner"></div>
         <div id="help">
-          <kbd>Space</kbd> lantern &middot; <kbd>E</kbd> turn mirror &middot; push into a wall to dig under it (<kbd>Enter</kbd> to confirm), <kbd>Q</kbd> use a tunnel &middot; WASD to move
+          <kbd>Space</kbd> lantern &middot; <kbd>E</kbd> interact &middot; push into a wall to dig (<kbd>Enter</kbd>) &middot; <kbd>Q</kbd> tunnel &middot; <kbd>R</kbd> mirror &middot; <kbd>T</kbd> talents
         </div>
         <div id="debug"></div>
         <div id="tip" hidden></div>
+        <div id="point-hint" hidden></div>
       </div>
     </main>
+
+    <div id="talents" hidden>
+      <div class="panel wide">
+        <div class="talents-head">
+          <h2>Talents</h2>
+          <button id="talents-close">Close (T)</button>
+        </div>
+        <p id="talent-points" class="hint"></p>
+        <div id="talent-trees"></div>
+        <p class="hint">Talents last for this run. Learn a tree's top talent to unlock the two below it.</p>
+      </div>
+    </div>
 
     <div id="runover" class="panel-screen" hidden>
       <div class="panel">

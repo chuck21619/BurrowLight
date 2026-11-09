@@ -281,6 +281,109 @@ button.primary {
   box-shadow: 0 0 6px #e07ad8;
 }
 
+#talents {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(11, 10, 16, 0.55);
+  z-index: 15;
+}
+
+.panel.wide {
+  width: min(900px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.talents-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.talents-head h2 {
+  margin: 0;
+  color: var(--accent);
+}
+
+#talent-trees {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #1f1a29;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.tree h3 {
+  margin: 0;
+  text-align: center;
+  font-size: 15px;
+}
+
+.tree .branches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 2px solid var(--panel-edge);
+  padding-left: 8px;
+}
+
+.talent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.talent strong {
+  font-size: 14px;
+}
+
+.talent.available {
+  border-color: var(--accent);
+}
+
+.talent.learned {
+  background: #3d5a3a;
+  border-color: #a8d8a0;
+  opacity: 1;
+}
+
+#point-hint {
+  position: absolute;
+  bottom: 56px;
+  right: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: bold;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+#party .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+#party .chip {
+  font-size: 11px;
+  background: #3a2f48;
+  border-radius: 6px;
+  padding: 0 5px;
+  color: var(--muted);
+}
+
 #runover-stats {
   list-style: none;
   margin: 0;

@@ -120,13 +120,15 @@ export type CardinalDir = 'n' | 's' | 'e' | 'w';
 export const isCardinal = (d: unknown): d is CardinalDir => d === 'n' || d === 's' || d === 'e' || d === 'w';
 
 /**
- * `rotate` turns the mirror you're standing on. `dig` starts a tunnel under the soft soil next to you
+ * `interact` (E) turns the mirror you're standing on, or uses a talent on what's next to you (wake a dazed
+ * friend, disarm a trap, share oil). `mirror` (R) sets down or picks up your Mirror Pack mirror. `dig` starts a tunnel under the soft soil next to you
  * in that direction. `burrow` travels through your tunnel when you stand on one of its ends.
  */
 export type Action =
   | { kind: 'move'; dir: Dir }
   | { kind: 'wait' }
-  | { kind: 'rotate' }
+  | { kind: 'interact' }
+  | { kind: 'mirror' }
   | { kind: 'dig'; dir: CardinalDir }
   | { kind: 'burrow' };
 
@@ -135,7 +137,8 @@ export function isAction(a: unknown): a is Action {
   const o = a as { kind?: unknown; dir?: unknown };
   return (
     o.kind === 'wait' ||
-    o.kind === 'rotate' ||
+    o.kind === 'interact' ||
+    o.kind === 'mirror' ||
     o.kind === 'burrow' ||
     (o.kind === 'move' && isDir(o.dir)) ||
     (o.kind === 'dig' && isCardinal(o.dir))
@@ -149,7 +152,7 @@ export const isDiagonal = (dir: Dir): boolean => dir.length === 2;
 
 export function actionCost(action: Action, speed = BASE_SPEED): number {
   if (action.kind === 'wait') return scaledCost(ActionCost.wait, speed);
-  if (action.kind === 'rotate') return scaledCost(ActionCost.rotate, speed);
+  if (action.kind === 'interact' || action.kind === 'mirror') return scaledCost(ActionCost.rotate, speed);
   if (action.kind === 'burrow') return scaledCost(ActionCost.burrow, speed);
   if (action.kind === 'dig') return DIG_TICKS;
   return scaledCost(isDiagonal(action.dir) ? ActionCost.moveDiagonal : ActionCost.moveCardinal, speed);
