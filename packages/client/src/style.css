@@ -203,13 +203,19 @@ button.primary {
 #canvas-host,
 #canvas-host canvas {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: block;
 }
 
 #hud {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   pointer-events: none;
   font-size: 14px;
 }
@@ -283,7 +289,10 @@ button.primary {
 
 #talents {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: grid;
   place-items: center;
   padding: 16px;
@@ -409,7 +418,10 @@ button.primary {
 
 #runover {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: rgba(11, 10, 16, 0.75);
   z-index: 20;
 }
@@ -681,7 +693,10 @@ body.touch #game,
 
 .touch-controls {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   pointer-events: none;
 }
 
@@ -691,7 +706,9 @@ body.touch #game,
 
 .dpad {
   position: absolute;
+  left: 16px;
   left: calc(16px + env(safe-area-inset-left));
+  bottom: 16px;
   bottom: calc(16px + env(safe-area-inset-bottom));
   width: 140px;
   height: 140px;
@@ -705,7 +722,10 @@ body.touch #game,
 .dpad::before {
   content: '';
   position: absolute;
-  inset: 22px;
+  top: 22px;
+  right: 22px;
+  bottom: 22px;
+  left: 22px;
   border-radius: 50%;
   border: 2px dashed rgba(201, 184, 166, 0.2);
 }
@@ -721,7 +741,9 @@ body.touch #game,
 
 .touch-actions {
   position: absolute;
+  right: 16px;
   right: calc(16px + env(safe-area-inset-right));
+  bottom: 16px;
   bottom: calc(16px + env(safe-area-inset-bottom));
   display: grid;
   grid-template-columns: repeat(2, 64px);
@@ -764,6 +786,7 @@ body.touch #game,
 
 .touch-top {
   position: absolute;
+  right: 12px;
   right: calc(12px + env(safe-area-inset-right));
   top: 64px;
   display: flex;
