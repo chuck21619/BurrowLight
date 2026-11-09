@@ -12,6 +12,8 @@ export interface Textures {
   sunshaft: Texture;
   heartstone: Texture;
   trap: Texture;
+  /** A trap that has snapped shut: harmless. */
+  trapShut: Texture;
   critter: Texture;
   /** Just the edge of the critter's silhouette, for when it's in the dark. White, so it can be tinted. */
   critterOutline: Texture;
@@ -262,6 +264,26 @@ export function makeTextures(renderer: Renderer): Textures {
         '................',
       ],
       { o: 0x3a3a42, m: 0x7a7a86, M: 0xb0b0bc, t: 0xece6dc, r: 0xb84a3a, R: 0xf08a7a },
+    );
+  });
+
+  const trapShut = bake((g) => {
+    floorBase(g);
+    art(
+      g,
+      [
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '..oMmMmMmMmMo...',
+        '..ottttttttto...',
+        '..ottttttttto...',
+        '..oMmMmMmMmMo...',
+        '...oooooooooo...',
+      ],
+      { o: 0x3a3a42, m: 0x6a6a76, M: 0x9a9aa6, t: 0xd8d2c8 },
     );
   });
 
@@ -548,6 +570,7 @@ export function makeTextures(renderer: Renderer): Textures {
     sunshaft,
     heartstone,
     trap,
+    trapShut,
     critter,
     critterOutline,
     shadow,

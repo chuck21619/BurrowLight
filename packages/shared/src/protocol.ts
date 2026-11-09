@@ -75,8 +75,10 @@ export type ServerMessage =
       h: number;
       players: PlayerInfo[];
       pos: PlayerPos[];
-      /** Flat [index, type, ...] of every tile the party has explored. */
+      /** Flat [index, type, ...] of every tile the party has explored (drawn). */
       tiles: number[];
+      /** The whole floor, one tile type per cell. The client walks on it but only draws explored tiles. */
+      map: number[];
       ack: number;
       /** Tile index of each Heartstone (objectives are always known), and its charge. */
       hearts: number[];
@@ -104,6 +106,8 @@ export type ServerMessage =
       party: PartyTalents;
       /** Pen doors: flat [door, plate, gem, gemCharge 0–100, open, ...] (-1 = none). */
       locks: number[];
+      /** Traps that have snapped shut (harmless). */
+      sprung: number[];
       /** Glowcaps: flat [index, ticksLeft, ...]. */
       glowcaps: number[];
       /** The Mothmother: [x, y, landed, face, restless], or null. */
@@ -133,6 +137,7 @@ export type ServerMessage =
       summary: RunSummary | null;
       party: PartyTalents;
       locks: number[];
+      sprung: number[];
       glowcaps: number[];
       moth: number[] | null;
       giant: number[] | null;

@@ -316,7 +316,8 @@ describe('light prototype', () => {
     queueIntent(game, 'a', 1, { kind: 'move', dir });
     queueIntent(game, 'a', 2, { kind: 'wait' });
     step(game);
-    expect(game.revealedTraps.has(target)).toBe(true);
+    expect(game.sprungTraps.has(target)).toBe(true); // it snapped shut...
+    expect(game.traps.has(target)).toBe(false); // ...and can't catch anyone again
     expect(a.lit).toBe(false); // the trap knocked the lantern out
     expect(a.koUntil).toBe(game.tick + KO_TICKS);
     expect(a.lastAck).toBe(2); // the queued wait was dropped

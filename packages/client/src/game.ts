@@ -158,11 +158,15 @@ export class GameView {
   private w = 0;
   private h = 0;
   private tiles = new Int8Array(0);
+  /** The whole floor (from the server), for walking and light. `tiles` is only what's been explored and drawn. */
+  private realTiles = new Int8Array(0);
   private tileSprites: (Sprite | undefined)[] = [];
   private sunshafts: number[] = [];
   private stairsIdx = -1;
   private traps = new Set<number>();
   private trapSprites = new Map<number, Sprite>();
+  /** Snapped-shut traps (harmless), always drawn once known. */
+  private sprungSprites = new Map<number, Sprite>();
   private hearts: Heart[] = [];
   private open = false;
   private light: LightMap | null = null;
@@ -287,12 +291,14 @@ export class GameView {
     this.w = msg.w;
     this.h = msg.h;
     this.tiles = new Int8Array(this.w * this.h).fill(UNKNOWN);
+    this.realTiles = Int8Array.from(msg.map);
     for (const layer of [this.tileLayer, this.markerLayer]) layer.removeChildren().forEach((c) => c.destroy());
     this.tileSprites = [];
     this.sunshafts = [];
     this.stairsIdx = -1;
     this.traps.clear();
     this.trapSprites.clear();
+    this.sprungSprites.clear();
     this.mirrorSprites.clear();
     this.mirrors.clear();
     this.torchSprites.clear();
@@ -308,6 +314,7 @@ export class GameView {
     this.locks = [];
     this.setLocks(msg.locks);
     for (const t of msg.traps) this.addTrap(t);
+    this.setSprung(msg.sprung);
     this.setMirrors(msg.mirrors);
     this.setTorches(msg.torches);
     this.glowcaps.clear();
@@ -366,6 +373,7 @@ export class GameView {
     this.setLocks(msg.locks);
     if (msg.feats.length) this.onFeats(msg.feats);
     this.setTraps(msg.traps);
+    this.setSprung(msg.sprung);
     this.setParty(msg.party);
     msg.heartCharge.forEach((c, k) => {
       const heart = this.hearts[k];
@@ -746,6 +754,7 @@ export class GameView {
       const isOpen = open === 1;
       if (isOpen) this.doorOpenedOnce ||= this.tiles[door] !== UNKNOWN;
       if (isOpen && !l.open && l.charge >= 0 && this.tiles[door] !== UNKNOWN) sfx.door();
+      this.realTiles[door] = isOpen ? Tile.DoorOpen : Tile.Door;
       if (this.tiles[door] !== UNKNOWN && this.tiles[door] !== (isOpen ? Tile.DoorOpen : Tile.Door)) {
         this.tiles[door] = isOpen ? Tile.DoorOpen : Tile.Door;
         const s = this.tileSprites[door];
@@ -793,10 +802,22 @@ export class GameView {
     const s = new Sprite(this.tex.trap);
     s.position.set((i % this.w) * TILE, Math.floor(i / this.w) * TILE);
     s.scale.set(SCALE);
-    s.visible = false;
     this.trapSprites.set(i, s);
     this.markerLayer.addChildAt(s, 0);
     this.lightDirty = true;
+  }
+
+  /** Traps that snapped shut: drawn closed, even in the dark (the party knows where they are). */
+  private setSprung(list: number[]): void {
+    for (const i of list) {
+      if (this.sprungSprites.has(i)) continue;
+      const s = new Sprite(this.tex.trapShut);
+      s.position.set((i % this.w) * TILE, Math.floor(i / this.w) * TILE);
+      s.scale.set(SCALE);
+      this.sprungSprites.set(i, s);
+      this.markerLayer.addChildAt(s, 0);
+      this.lightDirty = true;
+    }
   }
 
   /** The full list of traps the party can see: add new ones, drop disarmed ones. */
@@ -1160,22 +1181,15 @@ export class GameView {
     this.readyAt = base + actionCost(costOf ?? action) * this.tickMs;
   }
 
-  /** For light: tiles you haven't seen stop light (you can't light what you don't know). */
+  /** The real floor: walls are known from the start (they're just not drawn until explored). */
   private knownTile = (x: number, y: number): number => {
     if (x < 0 || y < 0 || x >= this.w || y >= this.h) return Tile.Wall;
-    const t = this.tiles[y * this.w + x]!;
-    return t === UNKNOWN ? Tile.Wall : t;
+    return this.realTiles[y * this.w + x] ?? Tile.Wall;
   };
 
-  /**
-   * For movement: you can feel your way into darkness you haven't seen. If it turns out to be
-   * a wall, the server says no and your critter slides back.
-   */
-  private moveTile = (x: number, y: number): number => {
-    if (x < 0 || y < 0 || x >= this.w || y >= this.h) return Tile.Wall;
-    const t = this.tiles[y * this.w + x]!;
-    return t === UNKNOWN ? Tile.Floor : t;
-  };
+  /** For movement: the real floor, so prediction always matches the server. */
+  private moveTile = this.knownTile;
+
 
   // ---------- Light ----------
 
@@ -1243,10 +1257,9 @@ export class GameView {
       const s = this.tileSprites[i];
       if (s) s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
     }
-    for (const [i, s] of this.trapSprites) {
-      s.visible = light.level[i]! > 0;
-      s.tint = lightTint(light.glow[i]!);
-    }
+    // Known traps stay drawn in the dark (dimly), so nobody walks back onto one they've found.
+    for (const [i, s] of this.trapSprites) s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
+    for (const [i, s] of this.sprungSprites) s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
     for (const a of this.avatars.values()) a.lamp.visible = a.info.id === this.you ? this.myLit : a.lit;
     this.lightDirty = false;
   }

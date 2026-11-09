@@ -217,6 +217,8 @@ export interface GameState {
   traps: Set<number>;
   revealedTraps: Set<number>;
   newlyRevealed: number[];
+  /** Traps that have snapped shut (harmless now, still drawn). */
+  sprungTraps: Set<number>;
   hearts: HeartState[];
   exitOpen: boolean;
   /** Mirror tile index -> current orientation. */
@@ -411,6 +413,7 @@ function enterFloor(state: GameState, n: number): void {
   state.traps = new Set(map.traps);
   state.revealedTraps = new Set();
   state.newlyRevealed = [];
+  state.sprungTraps = new Set();
   const great = Boolean(map.gloomStart || map.mothStart || map.giant);
   state.giant = map.giant ? { ...map.giant, face: giantFace(map, map.giant), stir: 0, awakeUntil: 0, wakes: 0 } : null;
   state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0, max: great ? GREAT_HEART_FULL : HEART_FULL }));
@@ -581,7 +584,10 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       p.lit = false;
       p.readyAt = p.koUntil;
       clearQueue(p);
-      reveal(state, here);
+      // It snaps shut: harmless from now on, so you can't get caught twice in the same spot.
+      state.traps.delete(here);
+      state.revealedTraps.delete(here);
+      state.sprungTraps.add(here);
     }
   }
 
