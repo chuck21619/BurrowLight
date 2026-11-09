@@ -165,7 +165,7 @@ export class GameView {
   private stairsIdx = -1;
   private traps = new Set<number>();
   private trapSprites = new Map<number, Sprite>();
-  /** Snapped-shut traps (harmless), always drawn once known. */
+  /** Snapped-shut traps (harmless), drawn only in light. */
   private sprungSprites = new Map<number, Sprite>();
   private hearts: Heart[] = [];
   private open = false;
@@ -807,7 +807,7 @@ export class GameView {
     this.lightDirty = true;
   }
 
-  /** Traps that snapped shut: drawn closed, even in the dark (the party knows where they are). */
+  /** Traps that snapped shut: drawn closed where light falls on them. */
   private setSprung(list: number[]): void {
     for (const i of list) {
       if (this.sprungSprites.has(i)) continue;
@@ -1259,7 +1259,11 @@ export class GameView {
     }
     // Known traps stay drawn in the dark (dimly), so nobody walks back onto one they've found.
     for (const [i, s] of this.trapSprites) s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
-    for (const [i, s] of this.sprungSprites) s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
+    // Sprung traps are harmless: only drawn where light falls, so they don't clutter the dark.
+    for (const [i, s] of this.sprungSprites) {
+      s.visible = light.level[i]! > 0;
+      s.tint = lightTint(light.glow[i]!);
+    }
     for (const a of this.avatars.values()) a.lamp.visible = a.info.id === this.you ? this.myLit : a.lit;
     this.lightDirty = false;
   }
