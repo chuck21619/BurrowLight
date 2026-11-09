@@ -99,6 +99,28 @@ export const GLOOM_TOUCH_COOLDOWN = 20;
 /** The Great Heartstone needs four times a normal one: 12 s of two lanterns while the Gloom is pinned. */
 export const GREAT_HEART_FULL = 240;
 
+// ---- Glowcaps (act 2): mushrooms lit by a passing lantern that glow for a while ----
+export const GLOWCAP_RADIUS = 2;
+/** How long a glowcap stays lit (15 s). */
+export const GLOWCAP_TICKS = 150;
+/** Glowcaps appear from this floor on. */
+export const GLOWCAPS_FROM_FLOOR = 4;
+
+// ---- The Mothmother (act 2 boss) ----
+/** Ticks per tile she flutters (faster as the Great Heartstone fills). */
+export const MOTH_STEP = 4;
+export const MOTH_STEP_RESTLESS = 3;
+/** She rests this long at the start of the fight, so the party can get its bearings. */
+export const MOTH_WAKE_TICKS = 50;
+/** How long she sits on a light once she lands on it. */
+export const MOTH_LAND_TICKS = 50;
+/** After a landing she's bored of that light for this long. */
+export const MOTH_BORED_TICKS = 90;
+/** Charge she drains from the Great Heartstone each tick she sits on it. */
+export const MOTH_DRAIN = 3;
+/** How much a lit glowcap appeals to her, against a lantern (1). */
+export const MOTH_GLOWCAP_BRIGHTNESS = 1.2;
+
 /** About one Heartstone per two players. */
 export const heartsForParty = (players: number): number => Math.max(1, Math.ceil(players / 2));
 /** Real actions a player may have waiting on the server at once. */

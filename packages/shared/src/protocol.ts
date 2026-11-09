@@ -100,6 +100,10 @@ export type ServerMessage =
       party: PartyTalents;
       /** Pen doors: flat [door, plate, gem, gemCharge 0–100, open, ...] (-1 = none). */
       locks: number[];
+      /** Glowcaps: flat [index, ticksLeft, ...]. */
+      glowcaps: number[];
+      /** The Mothmother: [x, y, landed, face, restless], or null. */
+      moth: number[] | null;
     }
   | {
       t: 'tick';
@@ -123,6 +127,8 @@ export type ServerMessage =
       summary: RunSummary | null;
       party: PartyTalents;
       locks: number[];
+      glowcaps: number[];
+      moth: number[] | null;
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

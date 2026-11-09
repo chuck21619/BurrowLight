@@ -63,6 +63,10 @@ export interface FloorMap {
   penRoom?: number;
   /** Walled Heartstone pens with a door, opened by a pressure plate or a sun gem. */
   locks: Lock[];
+  /** Glowcap mushrooms (act 2 on): a passing lantern lights them and they glow for a while. */
+  glowcaps: Point[];
+  /** Act 2 boss rooms: where the Mothmother (2×2, top-left corner) starts. */
+  mothStart?: Point;
 }
 
 /** A door and what opens it: a pressure plate (held) or a sun gem (lit by a sunbeam, opens for good). */
@@ -109,7 +113,8 @@ export function generateFloor(seed: number, floor = 1, heartCount = 1): FloorMap
   const rng = createRng(hashSeed(seed, floor, heartCount));
   for (let attempt = 0; attempt < 100; attempt++) {
     const map = tryGenerate(rng, roomCountFor(floor, rng));
-    if (map && placeFeatures(rng, map, heartCount, floor === BURROW_INTRO_FLOOR, floor >= LOCKS_FROM_FLOOR)) return map;
+    if (map && placeFeatures(rng, map, heartCount, floor === BURROW_INTRO_FLOOR, floor >= LOCKS_FROM_FLOOR, floor >= GLOWCAPS_FROM_FLOOR_GEN))
+      return map;
   }
   throw new Error(`could not generate floor for seed ${seed}`);
 }
@@ -229,6 +234,7 @@ function tryGenerate(rng: Rng, roomCount: number): FloorMap | null {
     mirrors: [],
     torches: [],
     locks: [],
+    glowcaps: [],
   };
 }
 
@@ -241,7 +247,7 @@ const SAFE_START_RADIUS = 2;
  * Sunshafts, Heartstones and hidden traps. Every floor starts in a sunshaft so the party can see.
  * Heartstones go on room tiles with floor all around, so they can never cut off a path.
  */
-function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro = false, locks = false): boolean {
+function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro = false, locks = false, glowcaps = false): boolean {
   const { w, tiles } = map;
   const idx = (p: Point) => p.y * w + p.x;
   const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
@@ -330,6 +336,17 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro 
     if (map.torches.some((o) => cheb(o, t) < 4)) continue;
     map.torches.push({ ...t, lit: false });
     used.add(t.y * w + t.x);
+  }
+
+  // Act 2 on: a few glowcaps, free light for a while, away from the Heartstones (like torches).
+  if (glowcaps) {
+    for (let k = rng.int(2, 3); k > 0 && torchSpots.length; k--) {
+      const c = torchSpots.splice(rng.int(0, torchSpots.length - 1), 1)[0]!;
+      const i = c.y * w + c.x;
+      if (used.has(i) || map.torches.some((t) => cheb(t, c) < 3) || map.glowcaps.some((o) => cheb(o, c) < 3)) continue;
+      map.glowcaps.push(c);
+      used.add(i);
+    }
   }
 
   paveRooms(rng, map, entranceRoom, dirtRooms);
@@ -483,6 +500,8 @@ function paveRooms(rng: Rng, map: FloorMap, entranceRoom: Rect, dirtRooms: Set<n
   });
 }
 
+/** Matches GLOWCAPS_FROM_FLOOR in rules (kept here to avoid an import cycle). */
+const GLOWCAPS_FROM_FLOOR_GEN = 4;
 /** Matches TORCH_RADIUS in rules (kept here to avoid an import cycle). */
 const TORCH_RADIUS_FOR_GEN = 3;
 
@@ -769,6 +788,76 @@ function tryBossRoom(rng: Rng): FloorMap | null {
     gloomStart,
     introTorch,
     locks: [],
+    glowcaps: [],
+  };
+}
+
+/**
+ * The act 2 boss room: one big glowcap grotto. The party's sunshaft on the left, a Great Heartstone
+ * toward the right, glowcaps scattered all around (the decoys), a few pillars, and the Mothmother
+ * resting far from the stone. No sunbeams here: this fight is about decoys, not pinning.
+ */
+export function generateMothFloor(seed: number, floor: number): FloorMap {
+  const rng = createRng(hashSeed(seed, floor, 0x307));
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const map = tryMothRoom(rng);
+    if (map) return map;
+  }
+  throw new Error(`could not generate moth floor for seed ${seed}`);
+}
+
+function tryMothRoom(rng: Rng): FloorMap | null {
+  const w = rng.int(20, 24);
+  const h = rng.int(13, 15);
+  const tiles = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) tiles[y * w + x] = Tile.Floor;
+  const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const entrance = { x: 2, y: Math.floor(h / 2) };
+  const heart = { x: w - rng.int(6, 8), y: rng.int(4, h - 5) };
+  const stairs = { x: w - 2, y: rng.chance(0.5) ? 1 : h - 2 };
+  for (let k = rng.int(3, 5); k > 0; k--) {
+    const px = rng.int(5, w - 4);
+    const py = rng.int(2, h - 3);
+    const [pw, ph] = rng.chance(0.5) ? [2, 1] : [1, 2];
+    if (cheb({ x: px, y: py }, heart) <= 2 || cheb({ x: px, y: py }, stairs) <= 1) continue;
+    for (let y = py; y < py + ph; y++) for (let x = px; x < px + pw; x++) tiles[y * w + x] = Tile.Wall;
+  }
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (tiles[(heart.y + dy) * w + heart.x + dx] !== Tile.Floor) return null;
+  tiles[entrance.y * w + entrance.x] = Tile.Sunshaft;
+  tiles[heart.y * w + heart.x] = Tile.Heartstone;
+  tiles[stairs.y * w + stairs.x] = Tile.StairsDown;
+  const d = distanceMap(tiles, w, h, entrance);
+  for (let i = 0; i < tiles.length; i++) if (isWalkable(tiles[i]!) && d[i]! < 0) return null;
+
+  // Glowcaps all around the room, away from the stone and the start, spread out.
+  const glowcaps: Point[] = [];
+  for (let tries = 0; tries < 200 && glowcaps.length < 8; tries++) {
+    const p = { x: rng.int(2, w - 3), y: rng.int(1, h - 2) };
+    if (tiles[p.y * w + p.x] !== Tile.Floor || cheb(p, heart) < 4 || cheb(p, entrance) < 3 || cheb(p, stairs) < 2) continue;
+    if (glowcaps.some((g) => cheb(g, p) < 4)) continue;
+    glowcaps.push(p);
+  }
+  if (glowcaps.length < 6) return null;
+  // She rests far from the stone (she flies, so walls don't matter for her).
+  const starts: Point[] = [];
+  for (let y = 1; y < h - 2; y++) for (let x = 5; x < w - 2; x++) if (cheb({ x, y }, heart) >= 8 && cheb({ x, y }, entrance) >= 5) starts.push({ x, y });
+  if (!starts.length) return null;
+  return {
+    w,
+    h,
+    tiles,
+    rooms: [{ x: 1, y: 1, w: w - 2, h: h - 2 }],
+    entrance,
+    stairs,
+    sunshafts: [entrance],
+    hearts: [heart],
+    traps: [],
+    emitters: [],
+    mirrors: [],
+    torches: [],
+    locks: [],
+    glowcaps,
+    mothStart: rng.pick(starts),
   };
 }
 

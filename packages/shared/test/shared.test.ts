@@ -52,6 +52,10 @@ import {
   GEM_FULL,
   LOCKS_FROM_FLOOR,
   type MirrorOrient,
+  GLOWCAP_TICKS,
+  MOTH_LAND_TICKS,
+  MOTH_BORED_TICKS,
+  generateMothFloor,
 } from '../src/index';
 
 describe('rng', () => {
@@ -98,7 +102,7 @@ function asciiMap(rows: string[]): FloorMap {
   const w = rows[0]!.length;
   const tiles = new Uint8Array(w * h);
   rows.forEach((r, y) => [...r].forEach((c, x) => (tiles[y * w + x] = c === '#' ? Tile.Wall : Tile.Floor)));
-  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [], emitters: [], mirrors: [], torches: [], locks: [] };
+  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [], emitters: [], mirrors: [], torches: [], locks: [], glowcaps: [] };
 }
 
 describe('field of view', () => {
@@ -555,7 +559,7 @@ describe('the Gloom', () => {
     }
   };
 
-  it('boss floors (3, 6, 9) have one Great Heartstone, sunbeams, mirrors and a Gloom that starts free', () => {
+  it('Gloom floors (3, and 9 for now) have one Great Heartstone, sunbeams, mirrors and a Gloom that starts free', () => {
     for (let seed = 1; seed <= 40; seed++) {
       const game = bossGame(seed);
       expect(game.hearts.length).toBe(1);
@@ -621,9 +625,9 @@ describe('the Gloom', () => {
     expect(d).toBeGreaterThan(0);
   });
 
-  it('mirrors can swing sunbeams across at least 40% of every boss room', () => {
+  it('mirrors can swing sunbeams across at least 40% of every Gloom room', () => {
     for (let seed = 1; seed <= 60; seed++) {
-      for (const floor of [3, 6, 9]) {
+      for (const floor of [3, 9]) {
         const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }], floor);
         const { map } = game;
         const reach = beamReach(map.w, map.h, map.tiles, map.emitters, new Set(game.mirrors.keys()));
@@ -1344,6 +1348,126 @@ describe('doors, pressure plates and sun gems', () => {
     for (const m of mirrors) game.mirrors.set(m, (1 - game.mirrors.get(m)!) as MirrorOrient);
     for (let i = 0; i < 5; i++) step(game);
     expect(lock.open).toBe(true);
+  });
+});
+
+describe('glowcaps and the Mothmother', () => {
+  const mothGame = (seed = 1) => {
+    const game = createGame(seed, [
+      { id: 'a', name: 'A', color: 1 },
+      { id: 'b', name: 'B', color: 2 },
+    ], 6);
+    for (const p of game.players.values()) {
+      p.x = game.map.entrance.x;
+      p.y = game.map.entrance.y;
+      p.lit = false;
+    }
+    return game;
+  };
+  const run = (game: ReturnType<typeof mothGame>, ticks: number) => {
+    for (let i = 0; i < ticks; i++) step(game);
+  };
+
+  it('act 2 floors have a few glowcaps; act 1 floors none; a passing lantern lights one and it fades out', () => {
+    let caps = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      expect(generateFloor(seed, 2, 2).glowcaps).toEqual([]);
+      caps += generateFloor(seed, 5, 2).glowcaps.length;
+    }
+    expect(caps).toBeGreaterThan(40);
+    const game = createGame(3, [{ id: 'a', name: 'A', color: 1 }], 4);
+    const [cap] = [...game.glowcaps.keys()];
+    expect(cap).toBeDefined();
+    const a = game.players.get('a')!;
+    game.traps.clear();
+    a.x = cap! % game.map.w;
+    a.y = Math.floor(cap! / game.map.w);
+    a.lit = true;
+    step(game);
+    expect(game.glowcaps.get(cap!)).toBeGreaterThan(GLOWCAP_TICKS - 3);
+    expect(game.light.level[cap!]).toBeGreaterThanOrEqual(2); // lantern + glowcap
+    a.lit = false;
+    run(game, GLOWCAP_TICKS);
+    expect(game.glowcaps.get(cap!)).toBe(0);
+  });
+
+  it('floor 6 is her grotto: a Great Heartstone, 6+ glowcaps, no Gloom and no sunbeams', () => {
+    for (let seed = 1; seed <= 30; seed++) {
+      const game = mothGame(seed);
+      expect(game.moth).not.toBeNull();
+      expect(game.gloom).toBeNull();
+      expect(game.hearts.length).toBe(1);
+      expect(game.hearts[0]!.max).toBe(GREAT_HEART_FULL);
+      expect(game.glowcaps.size).toBeGreaterThanOrEqual(6);
+      expect(game.map.emitters.length).toBe(0);
+    }
+    expect(generateMothFloor(5, 6).tiles).toEqual(generateMothFloor(5, 6).tiles);
+  });
+
+  it('she flies to the Great Heartstone, lands, drains it, then gets bored and takes off', () => {
+    const game = mothGame(2);
+    const heart = game.hearts[0]!;
+    heart.charge = 100;
+    const hi = heart.y * game.map.w + heart.x;
+    let landedAt = -1;
+    for (let t = 0; t < 400 && landedAt < 0; t++) {
+      heart.charge = 100; // (it would fade in the dark meanwhile)
+      step(game);
+      if (game.moth!.landedUntil > game.tick && gloomFootprint(game.map.w, game.moth!.x, game.moth!.y).includes(hi)) landedAt = game.tick;
+    }
+    expect(landedAt).toBeGreaterThan(0);
+    const before = heart.charge;
+    run(game, 10);
+    expect(heart.charge).toBeLessThan(before - 20);
+    run(game, MOTH_LAND_TICKS);
+    expect(game.moth!.bored.get('stone')).toBeGreaterThan(game.tick);
+  });
+
+  it('a lit glowcap far from the stone draws her away, and she puts it out when she lands', () => {
+    const game = mothGame(4);
+    const heart = game.hearts[0]!;
+    // The glowcap furthest from the stone, lit.
+    const caps = [...game.glowcaps.keys()].sort(
+      (p, q) => Math.hypot((q % game.map.w) - heart.x, Math.floor(q / game.map.w) - heart.y) - Math.hypot((p % game.map.w) - heart.x, Math.floor(p / game.map.w) - heart.y),
+    );
+    const cap = caps[0]!;
+    let went = false;
+    for (let t = 0; t < 300 && !went; t++) {
+      game.glowcaps.set(cap, Math.max(game.glowcaps.get(cap)!, 100));
+      step(game);
+      went = game.moth!.target === `cap:${cap}` && game.moth!.landedUntil > game.tick;
+    }
+    expect(went).toBe(true);
+    step(game); // her wings put it out
+    expect(game.glowcaps.get(cap)).toBe(0);
+  });
+
+  it('landing on a lit critter snuffs the lantern and gives a burst of Jitters', () => {
+    const game = mothGame(6);
+    const a = game.players.get('a')!;
+    a.oil = 99999;
+    let snuffed = false;
+    for (let t = 0; t < 300 && !snuffed; t++) {
+      a.lit = true;
+      step(game);
+      snuffed = !a.lit && game.moth!.landedUntil > game.tick;
+    }
+    expect(snuffed).toBe(true);
+    expect(a.jitters).toBeGreaterThanOrEqual(JITTERS_MAX / 2 - 10);
+    void MOTH_BORED_TICKS;
+  });
+
+  it('a full Great Heartstone sends her away and opens the hatch', () => {
+    const game = mothGame(1);
+    const heart = game.hearts[0]!;
+    heart.charge = GREAT_HEART_FULL;
+    const a = game.players.get('a')!;
+    a.x = heart.x - 1;
+    a.y = heart.y;
+    a.lit = true;
+    step(game);
+    expect(game.exitOpen).toBe(true);
+    expect(game.moth).toBeNull();
   });
 });
 

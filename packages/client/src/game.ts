@@ -8,6 +8,7 @@ import {
   MAX_QUEUED_INTENTS,
   SUNSHAFT_RADIUS,
   TORCH_RADIUS,
+  GLOWCAP_RADIUS,
   Tile,
   actionCost,
   alliesNeverBlock,
@@ -103,6 +104,9 @@ export interface Objective {
   open: boolean;
   /** On a boss floor: is the Gloom here, and is it pinned? */
   gloom: boolean;
+  /** The Mothmother is here (act 2 boss), and whether she's sitting on the Great Heartstone. */
+  moth: boolean;
+  mothOnStone: boolean;
   pinned: boolean;
   /** The boss introduction is playing. */
   intro: boolean;
@@ -177,6 +181,13 @@ export class GameView {
   private torchSprites = new Map<number, Sprite>();
   /** Pen doors and what opens them, from the server. */
   private locks: { door: number; plate: number; gem: number; charge: number; open: boolean; gemGlow: Sprite | null }[] = [];
+  /** Glowcap tile index -> ticks left lit. */
+  private glowcaps = new Map<number, number>();
+  private glowcapSprites = new Map<number, Sprite>();
+  private everLitGlowcap = false;
+  /** The Mothmother: server state plus a smoothed drawing position. */
+  private moth: { x: number; y: number; landed: boolean; face: number; restless: number; sx: number; sy: number } | null = null;
+  private mothView: { root: Container; wings: Graphics[] } | null = null;
   /** Has this player ever seen a pen door open (for the lock tip)? */
   private doorOpenedOnce = false;
   /** Ticks left in a boss intro (input is ignored and the camera watches the Gloom). */
@@ -278,6 +289,9 @@ export class GameView {
     for (const t of msg.traps) this.addTrap(t);
     this.setMirrors(msg.mirrors);
     this.setTorches(msg.torches);
+    this.glowcaps.clear();
+    this.glowcapSprites.clear();
+    this.setGlowcaps(msg.glowcaps);
     this.setTunnels(msg.tunnels);
     this.intro = msg.intro;
     this.markerLayer.addChild(this.beamGfx);
@@ -302,6 +316,10 @@ export class GameView {
     this.gloomView = null;
     this.gloom = null;
     this.setGloom(msg.gloom, true);
+    this.mothView?.root.destroy({ children: true });
+    this.mothView = null;
+    this.moth = null;
+    this.setMoth(msg.moth, true);
 
     for (const a of this.avatars.values()) a.root.destroy({ children: true });
     this.avatars.clear();
@@ -336,10 +354,89 @@ export class GameView {
     this.setTunnels(msg.tunnels);
     this.intro = msg.intro;
     this.setGloom(msg.gloom, false);
+    this.setGlowcaps(msg.glowcaps);
+    this.setMoth(msg.moth, false);
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
     this.emitObjective();
     if (msg.summary) this.onRunEnd(msg.summary);
+  }
+
+  private setGlowcaps(flat: number[]): void {
+    for (let k = 0; k < flat.length; k += 2) {
+      const i = flat[k]!;
+      const left = flat[k + 1]!;
+      let s = this.glowcapSprites.get(i);
+      if (!s) {
+        s = new Sprite(this.tex.glowcap[0]);
+        s.position.set((i % this.w) * TILE, Math.floor(i / this.w) * TILE);
+        s.scale.set(SCALE);
+        s.visible = false;
+        this.glowcapSprites.set(i, s);
+        this.markerLayer.addChild(s);
+      }
+      const was = this.glowcaps.get(i) ?? 0;
+      this.glowcaps.set(i, left);
+      if (left > 0 !== was > 0) {
+        s.texture = this.tex.glowcap[left > 0 ? 1 : 0];
+        this.lightDirty = true;
+        if (left > 0) this.everLitGlowcap = true;
+      }
+    }
+  }
+
+  private setMoth(packed: number[] | null, snap: boolean): void {
+    if (!packed) {
+      this.mothView?.root.destroy({ children: true });
+      this.mothView = null;
+      this.moth = null;
+      return;
+    }
+    const [x, y, landed, face, restless] = packed as [number, number, number, number, number];
+    const prev = this.moth;
+    this.moth = { x, y, landed: landed === 1, face, restless, sx: snap || !prev ? x : prev.sx, sy: snap || !prev ? y : prev.sy };
+    if (!this.mothView) this.mothView = this.makeMothView();
+  }
+
+  /** A big, fluffy, soft-glowing moth: cream body, lavender wings, feathery antennae. */
+  private makeMothView(): { root: Container; wings: Graphics[] } {
+    const root = new Container();
+    const glow = new Graphics().circle(0, 0, 46).fill({ color: 0xe8dcff, alpha: 0.12 });
+    const wings = [-1, 1].map((side) => {
+      const g = new Graphics();
+      g.ellipse(side * 22, -8, 24, 18).fill(0xc9b6e8);
+      g.ellipse(side * 18, 14, 16, 12).fill(0xb7a2dc);
+      g.circle(side * 24, -10, 6).fill(0xf2e8ff); // wing spots
+      g.circle(side * 24, -10, 3).fill(0x8a70b8);
+      return g;
+    });
+    const body = new Graphics();
+    body.ellipse(0, 4, 10, 20).fill(0xf4ead8);
+    body.circle(0, -14, 11).fill(0xfff6e6); // fluffy head
+    body.circle(-4, -15, 2.2).fill(0x2a2030); // eyes
+    body.circle(4, -15, 2.2).fill(0x2a2030);
+    body.circle(-3.4, -15.8, 0.8).fill(0xffffff);
+    body.circle(4.6, -15.8, 0.8).fill(0xffffff);
+    body.moveTo(-4, -23).quadraticCurveTo(-12, -36, -18, -32).stroke({ color: 0xd8c8a8, width: 2 }); // antennae
+    body.moveTo(4, -23).quadraticCurveTo(12, -36, 18, -32).stroke({ color: 0xd8c8a8, width: 2 });
+    root.addChild(glow, ...wings, body);
+    this.entityLayer.addChild(root);
+    return { root, wings };
+  }
+
+  /** She flutters between tiles with flapping wings; sitting, her wings fold slowly. */
+  private drawMoth(now: number, dtMs: number): void {
+    const m = this.moth;
+    const v = this.mothView;
+    if (!m || !v) return;
+    const k = Math.min(1, dtMs / 200);
+    m.sx += (m.x - m.sx) * k;
+    m.sy += (m.y - m.sy) * k;
+    const bob = m.landed ? 0 : Math.sin(now / 180) * 4;
+    v.root.position.set(Math.round((m.sx + 1) * TILE), Math.round((m.sy + 1) * TILE + bob));
+    v.root.zIndex = m.sy + 3; // she flies above everyone
+    const flap = m.landed ? 0.75 + 0.1 * Math.sin(now / 600) : 0.35 + 0.65 * Math.abs(Math.sin(now / (m.restless ? 70 : 110)));
+    for (const w of v.wings) w.scale.x = flap;
   }
 
   private setGloom(packed: number[] | null, snap: boolean): void {
@@ -912,6 +1009,7 @@ export class GameView {
     }
     for (const i of this.sunshafts) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: SUNSHAFT_RADIUS, strength: 1 });
     for (const [i, on] of this.torches) if (on) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: TORCH_RADIUS, strength: 1 });
+    for (const [i, left] of this.glowcaps) if (left > 0) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: GLOWCAP_RADIUS, strength: 1 });
 
     // Sunbeams, traced locally like the server does. Critters standing in a beam block it.
     const occupied = new Set<number>();
@@ -941,6 +1039,11 @@ export class GameView {
     for (const [i, s] of this.torchSprites) {
       s.visible = this.tiles[i] !== UNKNOWN || this.torches.get(i) === true;
       s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
+    }
+    for (const [i, s] of this.glowcapSprites) {
+      const lit = (this.glowcaps.get(i) ?? 0) > 0;
+      s.visible = this.tiles[i] !== UNKNOWN || lit;
+      s.tint = lit ? 0xffffff : light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
     }
     for (const h of this.hearts) {
       const lit = light.glow[h.idx]! > 0;
@@ -1120,6 +1223,7 @@ export class GameView {
     }
 
     this.drawGloom(now, dtMs);
+    this.drawMoth(now, dtMs);
 
     if (this.digPrompt) {
       const mine = this.avatars.get(this.you);
@@ -1277,6 +1381,10 @@ export class GameView {
       if (this.gateSeen && this.tunnels.size === 0) tip = 'That Heartstone is fenced in. Walk into the gate and hold to dig under it.';
       else if (this.tunnels.size > 0 && !this.usedTunnelKey)
         tip = 'You came out the other side! To go back through, stand on a tunnel hole and press Q.';
+    } else if (this.floor >= 4 && !this.everLitGlowcap && [...this.glowcapSprites.keys()].some((i) => this.tiles[i] !== UNKNOWN)) {
+      tip = this.moth
+        ? 'The Mothmother loves light! Light glowcaps away from the Great Heartstone to lure her off it.'
+        : 'Glowcaps! Walk over one with your lantern lit and it glows for a while, free.';
     } else if (unfinished && !this.doorOpenedOnce) {
       // First locked pens (act 2): one short hint per kind, until a door has been opened once.
       const seen = this.locks.filter((l) => !l.open && this.tiles[l.door] !== UNKNOWN);
@@ -1291,12 +1399,20 @@ export class GameView {
     }
   }
 
+  private mothOnStone(): boolean {
+    const m = this.moth;
+    const h = this.hearts[0];
+    return Boolean(m && h && m.landed && gloomFootprint(this.w, m.x, m.y).includes(h.idx));
+  }
+
   private emitObjective(): void {
     this.onObjective({
       charged: this.hearts.filter((h) => h.charge >= h.max).length,
       total: this.hearts.length,
       open: this.open,
       gloom: this.gloom !== null,
+      moth: this.moth !== null,
+      mothOnStone: this.mothOnStone(),
       pinned: this.gloom?.pinned ?? false,
       intro: this.intro > 0,
     });

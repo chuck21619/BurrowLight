@@ -16,6 +16,7 @@ import {
   canTunnelUnder,
   isDiggableGround,
   generateBossFloor,
+  generateMothFloor,
   generateFloor,
   isWalkable,
   spawnPoints,
@@ -55,6 +56,16 @@ import {
   GLOOM_WRIGGLE,
   GREAT_HEART_FULL,
   isBossFloor,
+  actOf,
+  GLOWCAP_RADIUS,
+  GLOWCAP_TICKS,
+  MOTH_STEP,
+  MOTH_STEP_RESTLESS,
+  MOTH_WAKE_TICKS,
+  MOTH_LAND_TICKS,
+  MOTH_BORED_TICKS,
+  MOTH_DRAIN,
+  MOTH_GLOWCAP_BRIGHTNESS,
   JITTERS_CALM,
   JITTERS_DARK,
   JITTERS_DARK_WITH_FRIEND,
@@ -193,6 +204,27 @@ export interface GameState {
   placedMirrors: Map<number, string>;
   /** Pen doors and what opens them. */
   locks: LockState[];
+  /** Glowcap tile index -> ticks it stays lit (0 = dark). */
+  glowcaps: Map<number, number>;
+  /** The act 2 boss, until the Great Heartstone is full. */
+  moth: MothState | null;
+}
+
+/** The Mothmother: a big moth (2×2, (x, y) its top-left tile) that flies to lights and lands on them. */
+export interface MothState {
+  x: number;
+  y: number;
+  nextStepAt: number;
+  /** Sitting on a light until this tick (0 = flying). */
+  landedUntil: number;
+  /** What she's after: 'stone', 'cap:<index>', or a critter's id. */
+  target: string | null;
+  /** Lights she's bored of, until this tick. */
+  bored: Map<string, number>;
+  /** 0, 1 or 2: faster as the Great Heartstone fills. */
+  restless: number;
+  /** Facing (-1 left, 1 right), for drawing. */
+  face: number;
 }
 
 export interface LockState {
@@ -302,7 +334,9 @@ export function createGame(seed: number, players: NewPlayer[], startFloor = 1): 
 /** Build floor `n` and put the party at its entrance. */
 function enterFloor(state: GameState, n: number): void {
   const map = isBossFloor(n)
-    ? generateBossFloor(hashSeed(state.seed), n)
+    ? actOf(n) === 2
+      ? generateMothFloor(hashSeed(state.seed), n)
+      : generateBossFloor(hashSeed(state.seed), n)
     : generateFloor(hashSeed(state.seed), n, heartsForParty(state.players.size));
   state.floor = n;
   state.map = map;
@@ -311,7 +345,12 @@ function enterFloor(state: GameState, n: number): void {
   state.traps = new Set(map.traps);
   state.revealedTraps = new Set();
   state.newlyRevealed = [];
-  state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0, max: map.gloomStart ? GREAT_HEART_FULL : HEART_FULL }));
+  const great = Boolean(map.gloomStart || map.mothStart);
+  state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0, max: great ? GREAT_HEART_FULL : HEART_FULL }));
+  state.glowcaps = new Map(map.glowcaps.map((c) => [c.y * map.w + c.x, 0]));
+  state.moth = map.mothStart
+    ? { ...map.mothStart, nextStepAt: state.tick + MOTH_WAKE_TICKS, landedUntil: 0, target: null, bored: new Map(), restless: 0, face: -1 }
+    : null;
   state.gloom = map.gloomStart
     ? {
         ...map.gloomStart,
@@ -472,11 +511,13 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     }
   }
 
-  // Carrying a flame over a torch lights it.
+  // Carrying a flame over a torch lights it; over a glowcap, lights it (again) for a while.
   for (const p of order) {
     const here = p.y * state.map.w + p.x;
     if (p.lit && state.torches.get(here) === false) state.torches.set(here, true);
+    if (p.lit && state.glowcaps.has(here)) state.glowcaps.set(here, GLOWCAP_TICKS);
   }
+  for (const [i, left] of state.glowcaps) if (left > 0) state.glowcaps.set(i, left - 1);
 
   if (inIntro(state)) {
     // The boss introduction: everyone watches the Gloom drift to a torch and eat it.
@@ -501,6 +542,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   const gloomMoved = updateGloom(state);
   // A snuffed lantern or eaten torch stops giving light this very tick.
   if (gloomTouches(state, order) || gloomMoved) updateLight(state);
+  if (updateMoth(state, order)) updateLight(state);
   updateJitters(state, order);
 
   const g = state.gloom;
@@ -509,6 +551,9 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     if (g && !g.pinned) {
       // The tether siphons off every bit of light poured in, and drains the stone: fast up close, slow far away.
       h.charge = Math.max(0, h.charge - gloomDrain(g.distance));
+    } else if (state.moth && state.moth.target === 'stone' && state.moth.landedUntil > state.tick) {
+      // The Mothmother sitting on the Great Heartstone: her wings cover it and she sips its light.
+      h.charge = Math.max(0, h.charge - MOTH_DRAIN);
     } else {
       h.charge = light > 0 ? Math.min(h.max, h.charge + light) : Math.max(0, h.charge - HEART_FADE);
     }
@@ -517,6 +562,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     state.exitOpen = true;
     state.stats.heartstones += state.hearts.length;
     state.gloom = null; // sun-soaked and content, it puffs away
+    state.moth = null; // dazzled, she flutters off up the shaft
   }
 
   if (state.exitOpen) {
@@ -630,6 +676,7 @@ export function lightSources(state: GameState): LightSource[] {
     if (p.lit) out.push({ x: p.x, y: p.y, radius: p.talents.has('brightWick') ? BRIGHT_WICK_RADIUS : LANTERN_RADIUS, strength: 1 });
   for (const s of state.map.sunshafts) out.push({ x: s.x, y: s.y, radius: SUNSHAFT_RADIUS, strength: 1 });
   for (const [i, on] of state.torches) if (on) out.push({ x: i % state.map.w, y: Math.floor(i / state.map.w), radius: TORCH_RADIUS, strength: 1 });
+  for (const [i, left] of state.glowcaps) if (left > 0) out.push({ x: i % state.map.w, y: Math.floor(i / state.map.w), radius: GLOWCAP_RADIUS, strength: 1 });
   return out;
 }
 
@@ -801,6 +848,95 @@ function chooseLight(state: GameState, dist: Map<number, number>, touchesHeart: 
     }
   }
   return best;
+}
+
+/**
+ * The Mothmother flies (over walls) toward the most appealing light: brightness against distance.
+ * Lit lanterns (huddled ones count more), lit glowcaps, and the Great Heartstone, which pulls harder
+ * as it fills. When her wings cover it she lands: a lantern goes out (with a burst of Jitters), a
+ * glowcap goes out, and the stone is drained while she sits on it. After a landing she's bored of
+ * that light for a while. Returns true if any light changed.
+ */
+function updateMoth(state: GameState, order: PlayerState[]): boolean {
+  const m = state.moth;
+  const heart = state.hearts[0];
+  if (!m || !heart) return false;
+  const { map } = state;
+  const w = map.w;
+  m.restless = heart.charge >= (heart.max * 2) / 3 ? 2 : heart.charge >= heart.max / 3 ? 1 : 0;
+  const foot = new Set(gloomFootprint(w, m.x, m.y));
+  let changed = false;
+
+  if (m.landedUntil > state.tick) {
+    // Sitting: anything lit under her wings goes out.
+    for (const p of order) {
+      if (!foot.has(p.y * w + p.x) || !p.lit || state.tick - p.gloomTouchAt < GLOOM_TOUCH_COOLDOWN) continue;
+      p.gloomTouchAt = state.tick;
+      p.lit = false;
+      p.jitters = Math.min(JITTERS_MAX, p.jitters + JITTERS_MAX / 2);
+      changed = true;
+    }
+    for (const i of foot) if ((state.glowcaps.get(i) ?? 0) > 0) {
+      state.glowcaps.set(i, 0);
+      changed = true;
+    }
+    return changed;
+  }
+  if (m.landedUntil > 0) {
+    // Just took off: bored of that light for a while.
+    if (m.target) m.bored.set(m.target, state.tick + MOTH_BORED_TICKS);
+    m.landedUntil = 0;
+    m.target = null;
+  }
+  if (state.tick < m.nextStepAt) return false;
+  m.nextStepAt = state.tick + (m.restless ? MOTH_STEP_RESTLESS : MOTH_STEP);
+
+  // Pick the most appealing light.
+  const cx = m.x + 0.5;
+  const cy = m.y + 0.5;
+  let best: { what: string; x: number; y: number } | null = null;
+  let bestScore = -Infinity;
+  const consider = (what: string, x: number, y: number, brightness: number) => {
+    if ((m.bored.get(what) ?? 0) > state.tick) return;
+    const score = brightness * GLOOM_BRIGHTNESS_WEIGHT - Math.max(Math.abs(x - cx), Math.abs(y - cy));
+    if (score > bestScore) {
+      bestScore = score;
+      best = { what, x, y };
+    }
+  };
+  consider('stone', heart.x, heart.y, GLOOM_STONE_BASE + GLOOM_STONE_FULL_BONUS * (heart.charge / heart.max));
+  for (const [i, left] of state.glowcaps) if (left > 0) consider(`cap:${i}`, i % w, Math.floor(i / w), MOTH_GLOWCAP_BRIGHTNESS);
+  const lit = order.filter((p) => p.lit);
+  for (const p of lit) consider(p.id, p.x, p.y, lit.filter((q) => Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= 1).length);
+  const target = best as { what: string; x: number; y: number } | null;
+  m.target = target?.what ?? null;
+  if (!target) return false;
+
+  // Landed once her wings cover it.
+  if (foot.has(target.y * w + target.x)) {
+    m.landedUntil = state.tick + MOTH_LAND_TICKS;
+    return false;
+  }
+  // Flutter one tile toward it (straight over walls), staying inside the room's outer wall.
+  const dx = Math.sign(target.x - cx);
+  const dy = Math.sign(target.y - cy);
+  if (dx) m.face = dx;
+  m.x = Math.min(map.w - 3, Math.max(1, m.x + dx));
+  m.y = Math.min(map.h - 3, Math.max(1, m.y + dy));
+  return false;
+}
+
+/** The Mothmother for the wire: [x, y, landed, face, restless], or null. */
+export function packMoth(state: GameState): number[] | null {
+  const m = state.moth;
+  return m ? [m.x, m.y, m.landedUntil > state.tick ? 1 : 0, m.face, m.restless] : null;
+}
+
+/** Glowcaps as a flat [index, ticksLeft, ...] list. */
+export function packGlowcaps(state: GameState): number[] {
+  const out: number[] = [];
+  for (const [i, left] of state.glowcaps) out.push(i, left);
+  return out;
 }
 
 /** Drifting through a critter snuffs its lantern and gives it a big burst of the Jitters. */

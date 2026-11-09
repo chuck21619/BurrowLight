@@ -350,11 +350,15 @@ game.onPartyTalents = (party, you) => {
 };
 
 let floorText = '';
-game.onObjective = ({ charged, total, open, gloom, pinned, intro }) => {
+game.onObjective = ({ charged, total, open, gloom, pinned, intro, moth, mothOnStone }) => {
   const goal = intro
     ? 'Something in the dark is hungry for light...'
     : open
     ? 'The hatch is open! Everyone gather on the ladder.'
+    : moth
+      ? mothOnStone
+        ? 'The Mothmother is sipping the Great Heartstone! Light glowcaps to lure her away'
+        : 'Charge the Great Heartstone, and keep the Mothmother busy with other lights'
     : gloom
       ? pinned
         ? 'The Gloom is pinned! Pour light into the Great Heartstone'

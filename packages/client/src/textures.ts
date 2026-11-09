@@ -36,6 +36,8 @@ export interface Textures {
   plate: [Texture, Texture];
   /** A sun gem on its pedestal: index 0 = dim, 1 = full of sunlight */
   gem: [Texture, Texture];
+  /** A glowcap mushroom (drawn over the floor): index 0 = dark, 1 = glowing */
+  glowcap: [Texture, Texture];
 }
 
 /** Placeholder pixel art drawn in code until the CC0 tileset goes in (M5). */
@@ -190,6 +192,19 @@ export function makeTextures(renderer: Renderer): Textures {
   };
   const gem: [Texture, Texture] = [bake((g) => gemDraw(g, false)), bake((g) => gemDraw(g, true))];
 
+  // Glowcaps: a little cluster of mushrooms, teal when glowing.
+  const capDraw = (g: Graphics, lit: boolean) => {
+    const cap = lit ? 0x7ff0d8 : 0x4a6a66;
+    const spot = lit ? 0xe8fff8 : 0x6a8a84;
+    px(g, 5, 9, 0xd8cdb8, 2, 5); // stems
+    px(g, 10, 10, 0xd8cdb8, 2, 4);
+    g.ellipse(6, 8, 4, 2.5).fill(cap);
+    g.ellipse(11, 9.5, 3, 2).fill(cap);
+    px(g, 5, 7, spot);
+    px(g, 11, 9, spot);
+  };
+  const glowcap: [Texture, Texture] = [bake((g) => capDraw(g, false)), bake((g) => capDraw(g, true))];
+
   const hole = bake((g) => {
     g.ellipse(8, 9, 6, 4).fill(0x3a2a1c);
     g.ellipse(8, 9, 4, 2.5).fill(0x120c08);
@@ -284,5 +299,6 @@ export function makeTextures(renderer: Renderer): Textures {
     doorOpen,
     plate,
     gem,
+    glowcap,
   };
 }

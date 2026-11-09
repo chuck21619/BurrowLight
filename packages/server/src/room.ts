@@ -22,6 +22,8 @@ import {
   learnTalent,
   packParty,
   packLocks,
+  packGlowcaps,
+  packMoth,
   type TalentId,
   step,
   type Action,
@@ -209,6 +211,8 @@ export class Room {
         summary,
         party,
         locks: packLocks(game),
+        glowcaps: packGlowcaps(game),
+        moth: packMoth(game),
       });
     }
   }
@@ -272,6 +276,8 @@ export class Room {
       summary: game.runOver || game.runWon ? runSummary(game) : null,
       party: packParty(game),
       locks: packLocks(game),
+      glowcaps: packGlowcaps(game),
+      moth: packMoth(game),
     });
   }
 
