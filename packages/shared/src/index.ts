@@ -7,3 +7,4 @@ export * from './protocol';
 export * from './light';
 export * from './beam';
 export * from './talents';
+export * from './gear';

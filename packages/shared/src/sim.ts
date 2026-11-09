@@ -10,6 +10,15 @@ import {
 } from './talents';
 import { computeLight, type LightMap, type LightSource } from './light';
 import {
+  CANDLE_CROWN_EXTRA_RADIUS,
+  DUNGAREES_DIG_TICKS,
+  LANTERN_BELT_KO_TICKS,
+  LANTERN_BELT_OIL,
+  cleanLoadout,
+  type Feat,
+  type Loadout,
+} from './gear';
+import {
   MAX_TUNNEL_SOIL,
   Tile,
   beamCellOf,
@@ -127,7 +136,34 @@ export interface PlayerState {
   points: number;
   /** Mirror Pack: carrying the mirror (rather than having set it down). */
   mirror: boolean;
+  /** Gear worn this run (chosen in the lobby, kept between runs by the player's browser). */
+  gear: Loadout;
+  /** Mirror Vest: which way the vest is angled. */
+  vest: MirrorOrient;
+  /** Fractional oil burn carried over between ticks (Thrifty Wick, Candle Crown). */
+  oilDebt: number;
+  /** Achievement events this tick (the server sends them to the player, then clears them). */
+  feats: Feat[];
 }
+
+const wears = (p: PlayerState, id: string): boolean => Object.values(p.gear).includes(id as never);
+
+/** How far a critter's lantern reaches: talents and gear. */
+export function lanternRadius(talents: { has(t: TalentId): boolean }, gear: Loadout): number {
+  const worn = Object.values(gear);
+  return (
+    (talents.has('brightWick') ? BRIGHT_WICK_RADIUS : LANTERN_RADIUS) +
+    (worn.includes('candleCrown') ? CANDLE_CROWN_EXTRA_RADIUS : 0) -
+    (worn.includes('owlGoggles') ? 1 : 0) -
+    (worn.includes('cozySweater') ? 1 : 0)
+  );
+}
+
+/** Most oil a critter can carry (the Lantern Belt holds more). */
+export const maxOil = (p: PlayerState): number => MAX_OIL + (wears(p, 'lanternBelt') ? LANTERN_BELT_OIL : 0);
+
+const bracesFor = (p: PlayerState): number =>
+  BURROW_BRACES_PER_FLOOR + (p.talents.has('deepPockets') ? 1 : 0) + (wears(p, 'diggingDungarees') ? 1 : 0);
 
 /** A tunnel under soft soil, between two floor tiles. Permanent, and anyone can use it. */
 export interface Tunnel {
@@ -311,6 +347,7 @@ export interface NewPlayer {
   id: string;
   name: string;
   color: number;
+  gear?: Loadout;
 }
 
 export function createGame(seed: number, players: NewPlayer[], startFloor = 1): GameState {
@@ -345,8 +382,13 @@ export function createGame(seed: number, players: NewPlayer[], startFloor = 1): 
       talents: new Set(),
       points: 0,
       mirror: false,
+      gear: cleanLoadout(p.gear),
+      vest: 0,
+      oilDebt: 0,
+      feats: [],
     });
   });
+  for (const p of state.players.values()) if (wears(p, 'lanternBelt')) p.oil += LANTERN_BELT_OIL;
   // Starting deeper (a testing option) comes with the points you'd have earned on the way down.
   for (const p of state.players.values()) p.points = startFloor - 1;
   enterFloor(state, startFloor);
@@ -400,7 +442,7 @@ function enterFloor(state: GameState, n: number): void {
   state.locks = map.locks.map((l) => ({ door: at(l.door), plate: at(l.plate), gem: at(l.gem), charge: 0, open: false, solved: false }));
   for (const p of state.players.values()) {
     p.digging = null;
-    p.braces = BURROW_BRACES_PER_FLOOR + (p.talents.has('deepPockets') ? 1 : 0);
+    p.braces = bracesFor(p);
     p.mirror = p.talents.has('mirrorPack'); // a placed mirror stays behind; you start each floor with it
   }
   state.introTorch = map.introTorch ? map.introTorch.y * map.w + map.introTorch.x : -1;
@@ -451,6 +493,7 @@ export interface StepOptions {
 export function step(state: GameState, opts: StepOptions = {}): void {
   if (state.runOver || state.runWon) return;
   state.tick++;
+  for (const p of state.players.values()) p.feats = [];
   state.newlyExplored = [];
   state.newlyRevealed = [];
   state.descended = false;
@@ -462,6 +505,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     if (p.digging && state.tick >= p.digging.until) {
       state.tunnels.push({ a: p.digging.a, b: p.digging.b, owner: p.id });
       state.stats.tunnels++;
+      p.feats.push('tunnel');
       p.braces = Math.max(0, p.braces - 1);
       p.x = p.digging.b % state.map.w;
       p.y = Math.floor(p.digging.b / state.map.w);
@@ -495,7 +539,11 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     } else if (action.kind === 'dig') {
       const plan = p.braces > 0 ? planTunnel(state, p.x, p.y, action.dir, p.talents.has('stonebreaker')) : null;
       if (plan) {
-        const digTime = p.talents.has('quickPaws') ? QUICK_PAWS_DIG_TICKS : actionCost(action, p.speed);
+        const digTime = p.talents.has('quickPaws')
+          ? QUICK_PAWS_DIG_TICKS
+          : wears(p, 'diggingDungarees')
+            ? DUNGAREES_DIG_TICKS
+            : actionCost(action, p.speed);
         p.digging = { until: state.tick + digTime, ...plan };
         cost = digTime;
       } else {
@@ -527,8 +575,9 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     const here = p.y * state.map.w + p.x;
     if (state.traps.has(here)) {
       // Snap! Stars circle your head, and the jolt knocks your lantern out.
-      p.koUntil = state.tick + KO_TICKS;
+      p.koUntil = state.tick + (wears(p, 'lanternBelt') ? LANTERN_BELT_KO_TICKS : KO_TICKS);
       state.stats.trapsSprung++;
+      p.feats.push('trap');
       p.lit = false;
       p.readyAt = p.koUntil;
       clearQueue(p);
@@ -557,9 +606,12 @@ export function step(state: GameState, opts: StepOptions = {}): void {
 
   for (const p of order) {
     if (!p.lit) continue;
-    if (p.talents.has('thriftyWick') && state.tick % 2 === 1) continue; // half the burn
-    p.oil = Math.max(0, p.oil - OIL_PER_TICK);
-    state.stats.oilBurned += OIL_PER_TICK;
+    // Thrifty Wick halves the burn; a Candle Crown burns half again as fast.
+    p.oilDebt += OIL_PER_TICK * (p.talents.has('thriftyWick') ? 0.5 : 1) * (wears(p, 'candleCrown') ? 1.5 : 1);
+    const burn = Math.floor(p.oilDebt);
+    p.oilDebt -= burn;
+    p.oil = Math.max(0, p.oil - burn);
+    state.stats.oilBurned += burn;
     if (p.oil === 0) p.lit = false;
   }
 
@@ -572,8 +624,10 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   updateJitters(state, order);
 
   const g = state.gloom;
+  const beamTiles = new Set(state.beams.flat());
   for (const h of state.hearts) {
     const light = state.light.level[h.y * state.map.w + h.x]!;
+    const wasFull = h.charge >= h.max;
     if (g && !g.pinned) {
       // The tether siphons off every bit of light poured in, and drains the stone: fast up close, slow far away.
       h.charge = Math.max(0, h.charge - gloomDrain(g.distance));
@@ -582,6 +636,14 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       h.charge = Math.max(0, h.charge - MOTH_DRAIN);
     } else {
       h.charge = light > 0 ? Math.min(h.max, h.charge + light) : Math.max(0, h.charge - HEART_FADE);
+    }
+    if (!wasFull && h.charge >= h.max) {
+      // Achievements for everyone there: a bright fill, or a sunbeam fill.
+      const hi = h.y * state.map.w + h.x;
+      for (const p of order) {
+        if (light >= 3) p.feats.push('bright');
+        if (beamTiles.has(hi)) p.feats.push('sunfill');
+      }
     }
   }
   if (!state.exitOpen && state.hearts.every((h) => h.charge >= h.max)) {
@@ -597,12 +659,14 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     const s = state.map.stairs;
     if (present.length > 0 && present.every((p) => p.x === s.x && p.y === s.y)) {
       state.stats.floorsCleared++;
+      for (const p of order) if (p.oil < 50) p.feats.push('lowOil');
       if (state.floor >= FINAL_FLOOR) {
+        for (const p of order) p.feats.push('win');
         state.runWon = true; // the Hearthlight is restored
         return;
       }
       for (const p of order) {
-        p.oil = Math.min(MAX_OIL, p.oil + OIL_PER_FLOOR);
+        p.oil = Math.min(maxOil(p), p.oil + OIL_PER_FLOOR);
         p.points++; // a talent point for every floor the party goes down
       }
       enterFloor(state, state.floor + 1);
@@ -654,7 +718,8 @@ function updateJitters(state: GameState, order: PlayerState[]): void {
       const near = (q: PlayerState, r: number) => q !== p && Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= r;
       // A friend right next to you, or a Soothe friend within 2 tiles, halves the Jitters.
       const friend = order.some((q) => near(q, 1) || (q.talents.has('soothe') && near(q, SOOTHE_RADIUS)));
-      p.jitters = Math.min(JITTERS_MAX, p.jitters + (friend ? JITTERS_DARK_WITH_FRIEND : JITTERS_DARK));
+      const rate = (friend ? JITTERS_DARK_WITH_FRIEND : JITTERS_DARK) * (wears(p, 'cozySweater') ? 0.5 : 1);
+      p.jitters = Math.min(JITTERS_MAX, p.jitters + rate);
     }
     if (!p.panic && p.jitters >= JITTERS_MAX) {
       p.panic = true;
@@ -665,6 +730,7 @@ function updateJitters(state: GameState, order: PlayerState[]): void {
       clearQueue(p);
     } else if (p.panic && p.jitters === 0) {
       p.panic = false;
+      p.feats.push('calm');
     }
   }
   if (order.length > 0 && order.every((p) => p.panic)) state.runOver = true;
@@ -700,7 +766,7 @@ export const alliesNeverBlock = (_x: number, _y: number): boolean => false;
 export function lightSources(state: GameState): LightSource[] {
   const out: LightSource[] = [];
   for (const p of state.players.values())
-    if (p.lit) out.push({ x: p.x, y: p.y, radius: p.talents.has('brightWick') ? BRIGHT_WICK_RADIUS : LANTERN_RADIUS, strength: 1 });
+    if (p.lit) out.push({ x: p.x, y: p.y, radius: lanternRadius(p.talents, p.gear), strength: 1 });
   for (const s of state.map.sunshafts) out.push({ x: s.x, y: s.y, radius: SUNSHAFT_RADIUS, strength: 1 });
   for (const [i, on] of state.torches) if (on) out.push({ x: i % state.map.w, y: Math.floor(i / state.map.w), radius: TORCH_RADIUS, strength: 1 });
   for (const [i, left] of state.glowcaps) if (left > 0) out.push({ x: i % state.map.w, y: Math.floor(i / state.map.w), radius: GLOWCAP_RADIUS, strength: 1 });
@@ -1026,18 +1092,23 @@ function gloomTouches(state: GameState, order: PlayerState[]): boolean {
 export function traceBeams(state: GameState): number[][] {
   const { map } = state;
   const occupied = new Set<number>();
-  for (const p of state.players.values()) occupied.add(p.y * map.w + p.x);
-  if (state.gloom) for (const i of gloomFootprint(map.w, state.gloom.x, state.gloom.y)) occupied.add(i);
+  const vests = new Map<number, MirrorOrient>();
   const prisms = new Set<number>();
-  for (const p of state.players.values()) if (p.talents.has('prism')) prisms.add(p.y * map.w + p.x);
+  for (const p of state.players.values()) {
+    const i = p.y * map.w + p.x;
+    if (p.talents.has('prism')) prisms.add(i);
+    else if (wears(p, 'mirrorVest') && !state.mirrors.has(i)) vests.set(i, p.vest); // bounces instead of blocking
+    else occupied.add(i);
+  }
+  if (state.gloom) for (const i of gloomFootprint(map.w, state.gloom.x, state.gloom.y)) occupied.add(i);
   return map.emitters.flatMap((e) =>
     traceBeamSplit(
       map.w,
       map.h,
       (x, y) => beamCellOf(tileAt(map, x, y)),
       e,
-      (i) => state.mirrors.get(i),
-      (i) => occupied.has(i),
+      (i) => state.mirrors.get(i) ?? vests.get(i),
+      (i) => occupied.has(i) && !vests.has(i),
       (i) => prisms.has(i),
     ),
   );
@@ -1178,14 +1249,17 @@ function interact(state: GameState, p: PlayerState): void {
     }
   }
   if (p.talents.has('shareFlame') && p.oil > 0) {
-    const friend = friends.find((q) => q.oil < MAX_OIL);
+    const friend = friends.find((q) => q.oil < maxOil(q));
     if (friend) {
-      const amount = Math.min(SHARE_FLAME_OIL, p.oil, MAX_OIL - friend.oil);
+      const amount = Math.min(SHARE_FLAME_OIL, p.oil, maxOil(friend) - friend.oil);
       p.oil -= amount;
       friend.oil += amount;
       if (p.oil === 0) p.lit = false;
+      return;
     }
   }
+  // Nothing else to do: turn your Mirror Vest.
+  if (wears(p, 'mirrorVest')) p.vest = (1 - p.vest) as MirrorOrient;
 }
 
 /** R: set your Mirror Pack mirror down on empty floor, or pick it back up from where you're standing. */
@@ -1213,9 +1287,9 @@ function useMirrorPack(state: GameState, p: PlayerState): void {
   p.mirror = false;
 }
 
-/** Talents, unspent points and Mirror Pack state for every critter: [id, talents, points, carryingMirror]. */
-export function packParty(state: GameState): [string, TalentId[], number, 0 | 1][] {
-  return [...state.players.values()].map((p) => [p.id, [...p.talents], p.points, p.mirror ? 1 : 0]);
+/** Talents, points, Mirror Pack, gear and vest angle for every critter. */
+export function packParty(state: GameState): [string, TalentId[], number, 0 | 1, Loadout, MirrorOrient][] {
+  return [...state.players.values()].map((p) => [p.id, [...p.talents], p.points, p.mirror ? 1 : 0, p.gear, p.vest]);
 }
 
 /** Tunnels as [endA, endB, ownerId] triples. */

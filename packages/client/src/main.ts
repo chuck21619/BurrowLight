@@ -13,7 +13,9 @@ import {
   type ServerMessage,
   type TalentId,
 } from '@burrowlight/shared';
+import { GEAR, gearDef, type GearSlot, type Loadout } from '@burrowlight/shared';
 import { GameView } from './game';
+import { progress, recordFeats, setWearing, unlocked, wearing } from './save';
 import { Net } from './net';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -159,6 +161,68 @@ function renderLobby(msg: Extract<ServerMessage, { t: 'lobby' }>) {
       : 'Waiting for everyone to be ready…'
     : 'The host starts the run when everyone is ready.';
 }
+
+// ---------- Gear ----------
+
+const SLOT_NAMES: Record<GearSlot, string> = { head: 'Head', shirt: 'Shirt', pants: 'Pants' };
+let gearSentFor = '';
+
+function sendGear() {
+  net.send({ t: 'gear', gear: wearing() });
+}
+
+function renderGear() {
+  const current = wearing();
+  const slots = $('gear-slots');
+  slots.replaceChildren();
+  for (const slot of ['head', 'shirt', 'pants'] as GearSlot[]) {
+    const label = document.createElement('label');
+    label.textContent = SLOT_NAMES[slot];
+    const select = document.createElement('select');
+    select.setAttribute('aria-label', `${SLOT_NAMES[slot]} gear`);
+    select.append(new Option('Nothing', ''));
+    for (const g of GEAR.filter((d) => d.slot === slot)) {
+      const opt = new Option(unlocked(g.id) ? g.name : `${g.name} (locked)`, g.id);
+      opt.disabled = !unlocked(g.id);
+      select.append(opt);
+    }
+    select.value = current[slot] ?? '';
+    select.addEventListener('change', () => {
+      const next: Loadout = { ...wearing() };
+      if (select.value) next[slot] = select.value as never;
+      else delete next[slot];
+      setWearing(next);
+      sendGear();
+      renderGear();
+    });
+    slots.append(label, select);
+  }
+  const worn = Object.values(current).map((id) => gearDef(id!)!);
+  $('gear-text').textContent = worn.length ? worn.map((g) => `${g.name}: ${g.text}`).join(' ') : 'No gear yet: unlock some by playing.';
+  const locked = GEAR.filter((g) => !unlocked(g.id));
+  $('gear-locked').hidden = locked.length === 0;
+  $('gear-unlocks').replaceChildren(
+    ...locked.map((g) => {
+      const li = document.createElement('li');
+      li.textContent = `${g.name} (${SLOT_NAMES[g.slot].toLowerCase()}): ${g.unlock}${g.needs > 1 ? ` ${progress(g)}/${g.needs}` : ''}`;
+      return li;
+    }),
+  );
+}
+
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+function toast(text: string) {
+  const el = $('toast');
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), 6000);
+}
+
+game.onFeats = (feats) => {
+  const fresh = recordFeats(feats);
+  if (fresh.length) toast(`New gear unlocked: ${fresh.map((g) => g.name).join(', ')}! Wear it from the lobby next run.`);
+};
 
 function lobbyRow(p: LobbyPlayer, host: boolean, you: boolean) {
   const li = document.createElement('li');
@@ -389,6 +453,11 @@ net.onMessage = async (msg) => {
       status(null);
       setError('');
       renderLobby(msg);
+      renderGear();
+      if (gearSentFor !== msg.code + msg.you) {
+        gearSentFor = msg.code + msg.you;
+        sendGear();
+      }
       show('lobby');
       break;
     case 'welcome':

@@ -9,6 +9,8 @@ import {
   SUNSHAFT_RADIUS,
   TORCH_RADIUS,
   GLOWCAP_RADIUS,
+  lanternRadius,
+  type Loadout,
   Tile,
   actionCost,
   alliesNeverBlock,
@@ -84,6 +86,8 @@ interface Avatar {
   label: Text;
   stars: Container;
   lamp: Sprite;
+  /** Worn gear, drawn over the body. */
+  gearGfx: Graphics;
 }
 
 export interface PartyMember {
@@ -226,9 +230,11 @@ export class GameView {
   private interactRequested = false;
   private mirrorRequested = false;
   /** Everyone's talents, unspent points and Mirror Pack state, by critter id. */
-  private party = new Map<string, { talents: Set<TalentId>; points: number; mirror: boolean }>();
+  private party = new Map<string, { talents: Set<TalentId>; points: number; mirror: boolean; gear: Loadout; vest: 0 | 1 }>();
   /** Fired when anyone's talents or points change. */
-  onPartyTalents: (party: Map<string, { talents: Set<TalentId>; points: number; mirror: boolean }>, you: string) => void = () => {};
+  onPartyTalents: (party: Map<string, { talents: Set<TalentId>; points: number; mirror: boolean; gear: Loadout; vest: 0 | 1 }>, you: string) => void = () => {};
+  /** Achievement events for you, from the server (your browser counts them toward gear). */
+  onFeats: (feats: string[]) => void = () => {};
   /** One buffered key tap, so quick taps (or a tap while busy) are never lost. */
   private tapped: Dir | null = null;
 
@@ -351,6 +357,7 @@ export class GameView {
     this.serverTick = msg.tick;
     this.addTiles(msg.tiles);
     this.setLocks(msg.locks);
+    if (msg.feats.length) this.onFeats(msg.feats);
     this.setTraps(msg.traps);
     this.setParty(msg.party);
     msg.heartCharge.forEach((c, k) => {
@@ -775,12 +782,15 @@ export class GameView {
 
   private setParty(list: PartyTalents): void {
     let changed = false;
-    for (const [id, talents, points, mirror] of list) {
+    for (const [id, talents, points, mirror, gear, vest] of list) {
       const cur = this.party.get(id);
-      const key = `${talents.join(',')}|${points}|${mirror}`;
-      const was = cur ? `${[...cur.talents].join(',')}|${cur.points}|${cur.mirror ? 1 : 0}` : '';
+      const gearKey = (g: Loadout) => `${g.head ?? ''},${g.shirt ?? ''},${g.pants ?? ''}`;
+      const key = `${talents.join(',')}|${points}|${mirror}|${gearKey(gear)}|${vest}`;
+      const was = cur ? `${[...cur.talents].join(',')}|${cur.points}|${cur.mirror ? 1 : 0}|${gearKey(cur.gear)}|${cur.vest}` : '';
       if (key === was) continue;
-      this.party.set(id, { talents: new Set(talents), points, mirror: mirror === 1 });
+      this.party.set(id, { talents: new Set(talents), points, mirror: mirror === 1, gear, vest });
+      const a = this.avatars.get(id);
+      if (a) drawGear(a.gearGfx, gear, vest);
       changed = true;
     }
     if (changed) {
@@ -1098,7 +1108,8 @@ export class GameView {
     const sources: LightSource[] = [];
     for (const [id, a] of this.avatars) {
       const lit = id === this.you ? this.myLit && a.oil > 0 : a.lit;
-      if (lit) sources.push({ x: a.tx, y: a.ty, radius: this.has(id, 'brightWick') ? BRIGHT_WICK_RADIUS : LANTERN_RADIUS, strength: 1 });
+      const pm = this.party.get(id);
+      if (lit) sources.push({ x: a.tx, y: a.ty, radius: lanternRadius(pm?.talents ?? new Set(), pm?.gear ?? {}), strength: 1 });
     }
     for (const i of this.sunshafts) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: SUNSHAFT_RADIUS, strength: 1 });
     for (const [i, on] of this.torches) if (on) sources.push({ x: i % this.w, y: Math.floor(i / this.w), radius: TORCH_RADIUS, strength: 1 });
@@ -1106,10 +1117,16 @@ export class GameView {
 
     // Sunbeams, traced locally like the server does. Critters standing in a beam block it.
     const occupied = new Set<number>();
-    for (const a of this.avatars.values()) occupied.add(a.ty * this.w + a.tx);
-    if (this.gloom) for (const i of gloomFootprint(this.w, this.gloom.x, this.gloom.y)) occupied.add(i);
     const prisms = new Set<number>();
-    for (const [id, a] of this.avatars) if (this.has(id, 'prism')) prisms.add(a.ty * this.w + a.tx);
+    const vests = new Map<number, 0 | 1>();
+    for (const [id, a] of this.avatars) {
+      const i = a.ty * this.w + a.tx;
+      const pm = this.party.get(id);
+      if (this.has(id, 'prism')) prisms.add(i);
+      else if (pm && Object.values(pm.gear).includes('mirrorVest') && !this.mirrors.has(i)) vests.set(i, pm.vest);
+      else occupied.add(i);
+    }
+    if (this.gloom) for (const i of gloomFootprint(this.w, this.gloom.x, this.gloom.y)) occupied.add(i);
     const beams = this.emitters
       .filter((e) => this.tiles[e.y * this.w + e.x] !== UNKNOWN)
       .flatMap((e) =>
@@ -1118,8 +1135,8 @@ export class GameView {
           this.h,
           (x, y) => beamCellOf(this.knownTile(x, y)),
           e,
-          (i) => this.mirrors.get(i),
-          (i) => occupied.has(i),
+          (i) => this.mirrors.get(i) ?? vests.get(i),
+          (i) => occupied.has(i) && !vests.has(i),
           (i) => prisms.has(i),
         ),
       );
@@ -1225,7 +1242,8 @@ export class GameView {
     });
     label.anchor.set(0.5, 1);
     label.position.set(0, -TILE * 0.5);
-    root.addChild(shadow, body, outline, lamp, stars, digBar, label);
+    const gearGfx = new Graphics();
+    root.addChild(shadow, body, gearGfx, outline, lamp, stars, digBar, label);
     this.entityLayer.addChild(root);
     this.avatars.set(info.id, {
       info,
@@ -1243,6 +1261,7 @@ export class GameView {
       braces: 0,
       jitters: 0,
       panic: false,
+      gearGfx,
       root,
       body,
       outline,
@@ -1251,6 +1270,8 @@ export class GameView {
       stars,
       lamp,
     });
+    const pm = this.party.get(info.id);
+    if (pm) drawGear(gearGfx, pm.gear, pm.vest);
   }
 
   private frame(dtMs: number): void {
@@ -1365,6 +1386,7 @@ export class GameView {
     const mode = inLight ? 'full' : self || close ? 'outline' : 'hidden';
     a.root.visible = mode !== 'hidden';
     a.body.visible = mode === 'full';
+    a.gearGfx.visible = mode === 'full';
     a.shadow.visible = mode === 'full';
     a.outline.visible = mode === 'outline';
     a.label.visible = mode !== 'hidden';
@@ -1516,6 +1538,37 @@ export class GameView {
       pinned: this.gloom?.pinned ?? false,
       intro: this.intro > 0,
     });
+  }
+}
+
+/** Worn gear, drawn over a critter (centred on its body; 48 px tile). */
+function drawGear(g: Graphics, gear: Loadout, vest: 0 | 1): void {
+  g.clear();
+  if (gear.head === 'candleCrown') {
+    g.rect(-9, -24, 18, 5).fill(0xd8b45a);
+    for (const x of [-7, 0, 7]) {
+      g.rect(x - 1.5, -31, 3, 7).fill(0xfff4e0);
+      g.circle(x, -33, 2).fill(0xffb347);
+    }
+  } else if (gear.head === 'owlGoggles') {
+    g.rect(-11, -10, 22, 2).fill(0x5a3a2a);
+    for (const x of [-6, 6]) g.circle(x, -9, 5).fill(0x8a6a48).circle(x, -9, 3).fill(0xa8e0ff);
+  }
+  if (gear.shirt === 'mirrorVest') {
+    g.roundRect(-10, 2, 20, 9, 3).fill(0xc8d4e0);
+    const d = vest === 0 ? 1 : -1;
+    g.moveTo(-6, 6 + 3 * d).lineTo(6, 6 - 3 * d).stroke({ color: 0xffffff, width: 2 });
+  } else if (gear.shirt === 'cozySweater') {
+    g.roundRect(-10, 2, 20, 9, 3).fill(0xc0504d);
+    g.rect(-10, 5, 20, 2).fill(0xf4ead8);
+  }
+  if (gear.pants === 'diggingDungarees') {
+    g.rect(-9, 11, 18, 6).fill(0x4a6a9a);
+    g.rect(-6, 4, 2, 8).fill(0x4a6a9a);
+    g.rect(4, 4, 2, 8).fill(0x4a6a9a);
+  } else if (gear.pants === 'lanternBelt') {
+    g.rect(-10, 11, 20, 3).fill(0x6e4520);
+    g.rect(-3, 10, 6, 5).fill(0xd8b45a);
   }
 }
 

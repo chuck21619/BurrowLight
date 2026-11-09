@@ -61,6 +61,10 @@ import {
   giantFace,
   GIANT_STIR_MAX,
   GIANT_AWAKE_TICKS,
+  START_OIL,
+  LANTERN_BELT_OIL,
+  traceBeams,
+  cleanLoadout,
 } from '../src/index';
 
 describe('rng', () => {
@@ -1546,6 +1550,82 @@ describe('the Sleeping Giant', () => {
     for (let t = 0; t < 50; t++) step(game);
     expect(game.giant!.stir).toBe(0);
     expect(game.hearts[0]!.charge).toBeGreaterThan(40);
+  });
+});
+
+describe('gear and achievements', () => {
+  it('only real gear in the right slot is kept', () => {
+    expect(cleanLoadout({ head: 'owlGoggles', shirt: 'owlGoggles', pants: 'nope', extra: 1 })).toEqual({ head: 'owlGoggles' });
+    expect(cleanLoadout(null)).toEqual({});
+  });
+
+  it('Lantern Belt, Digging Dungarees and Candle Crown do what they say, costs included', () => {
+    const game = createGame(7, [
+      { id: 'a', name: 'A', color: 1, gear: { pants: 'lanternBelt', head: 'candleCrown' } },
+      { id: 'b', name: 'B', color: 2, gear: { pants: 'diggingDungarees', head: 'owlGoggles' } },
+    ]);
+    const a = game.players.get('a')!;
+    const b = game.players.get('b')!;
+    expect(a.oil).toBe(START_OIL + LANTERN_BELT_OIL);
+    expect(b.braces).toBe(BURROW_BRACES_PER_FLOOR + 1);
+    const radius = (id: string) => lightSources(game).find((s) => s.x === game.players.get(id)!.x && s.y === game.players.get(id)!.y)?.radius;
+    a.lit = true;
+    b.lit = true;
+    b.x = a.x; // (sources are matched by position: keep them apart)
+    b.y = a.y;
+    a.lit = true;
+    game.players.get('b')!.lit = false;
+    expect(radius('a')).toBe(5);
+    a.lit = false;
+    b.lit = true;
+    expect(radius('b')).toBe(3);
+    // Candle Crown burns half again as fast.
+    a.lit = true;
+    b.lit = false;
+    const before = a.oil;
+    game.map.sunshafts = [];
+    for (let i = 0; i < 20; i++) step(game);
+    expect(before - a.oil).toBe(30);
+  });
+
+  it('the server reports feats: a trap, a tunnel, calming down', () => {
+    const game = createGame(7, [{ id: 'a', name: 'A', color: 1 }]);
+    const a = game.players.get('a')!;
+    // A trap right where A stands next.
+    const here = a.y * game.map.w + a.x;
+    game.traps.add(here);
+    queueIntent(game, 'a', 1, { kind: 'wait' });
+    step(game);
+    expect(a.feats).toContain('trap');
+    step(game);
+    expect(a.feats).toEqual([]); // cleared each tick
+    a.panic = true;
+    a.jitters = 0;
+    step(game);
+    expect(a.feats).toContain('calm');
+  });
+
+  it('Mirror Vest: a sunbeam bounces off you instead of stopping, and E turns the vest', () => {
+    const game = createGame(7, [{ id: 'a', name: 'A', color: 1, gear: { shirt: 'mirrorVest' } }]);
+    const { map } = game;
+    // A tiny test room: emitter on the left, the vest wearer in the beam.
+    const room = asciiMap(['#######', '#.....#', '#.....#', '#.....#', '#######']);
+    Object.assign(map, { w: room.w, h: room.h, tiles: room.tiles, emitters: [{ x: 1, y: 2, dx: 1, dy: 0 }] });
+    game.mirrors.clear();
+    game.gloom = null;
+    const a = game.players.get('a')!;
+    a.x = 3;
+    a.y = 2;
+    const lit = () => new Set(traceBeams(game).flat());
+    const at = (x: number, y: number) => y * room.w + x;
+    const first = lit();
+    expect(first.has(at(4, 2))).toBe(false); // it doesn't carry straight on
+    expect(first.has(at(3, 1)) || first.has(at(3, 3))).toBe(true); // it turned
+    const wentUp = first.has(at(3, 1));
+    queueIntent(game, 'a', 1, { kind: 'interact' });
+    step(game);
+    expect(a.vest).toBe(1);
+    expect(lit().has(at(3, wentUp ? 3 : 1))).toBe(true);
   });
 });
 

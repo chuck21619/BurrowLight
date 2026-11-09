@@ -26,6 +26,8 @@ import {
   packMoth,
   packGiant,
   type TalentId,
+  type Loadout,
+  cleanLoadout,
   step,
   type Action,
   type GameState,
@@ -46,6 +48,8 @@ export interface Member {
   ready: boolean;
   peer: Peer | null;
   disconnectedAt: number | null;
+  /** Gear picked in the lobby. */
+  gear: Loadout;
 }
 
 const COLORS = [0xe07a5f, 0x81b29a, 0xf2cc8f, 0x7aa6d6, 0xc39bd3, 0xf4a6b8, 0x9fd4d0, 0xd9a066];
@@ -88,6 +92,7 @@ export class Room {
       ready: false,
       peer,
       disconnectedAt: null,
+      gear: {},
     };
     this.members.set(member.id, member);
     if (!this.hostId) this.hostId = member.id;
@@ -124,6 +129,13 @@ export class Room {
     if (this.connectedCount === 0) this.emptySince = now;
   }
 
+  /** Pick gear for this run (lobby only). */
+  setGear(memberId: string, gear: unknown): void {
+    const m = this.members.get(memberId);
+    if (!m || this.phase !== 'lobby') return;
+    m.gear = cleanLoadout(gear);
+  }
+
   setReady(memberId: string, ready: boolean): void {
     const m = this.members.get(memberId);
     if (!m || this.phase !== 'lobby') return;
@@ -140,7 +152,7 @@ export class Room {
     const seed = this.devSeed ?? randomInt(1, 2 ** 31);
     this.game = createGame(
       seed,
-      [...this.members.values()].map((m) => ({ id: m.id, name: m.name, color: m.color })),
+      [...this.members.values()].map((m) => ({ id: m.id, name: m.name, color: m.color, gear: m.gear })),
       this.startFloor,
     );
     for (const m of this.members.values()) this.sendWelcome(m);
@@ -215,6 +227,7 @@ export class Room {
         glowcaps: packGlowcaps(game),
         moth: packMoth(game),
         giant: packGiant(game),
+        feats: p.feats,
       });
     }
   }

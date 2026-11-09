@@ -1,6 +1,8 @@
 import type { Action } from './rules';
 import type { RunSummary } from './sim';
 import type { TalentId } from './talents';
+import type { Feat, Loadout } from './gear';
+import type { MirrorOrient } from './beam';
 
 // ---- Client -> server ----
 export type ClientMessage =
@@ -14,10 +16,12 @@ export type ClientMessage =
   /** Ask whether a dig in `dir` would work, before asking the player to spend a brace. */
   | { t: 'checkDig'; dir: 'n' | 's' | 'e' | 'w' }
   /** Spend a talent point. */
-  | { t: 'learn'; talent: TalentId };
+  | { t: 'learn'; talent: TalentId }
+  /** In the lobby: the gear you're wearing this run. */
+  | { t: 'gear'; gear: Loadout };
 
-/** Each critter's talents: [id, talents learned, unspent points, carrying a Mirror Pack mirror]. */
-export type PartyTalents = [id: string, talents: TalentId[], points: number, mirror: 0 | 1][];
+/** Each critter's talents: [id, talents learned, unspent points, carrying a Mirror Pack mirror, gear, vest angle]. */
+export type PartyTalents = [id: string, talents: TalentId[], points: number, mirror: 0 | 1, gear: Loadout, vest: MirrorOrient][];
 
 // ---- Server -> client ----
 export interface LobbyPlayer {
@@ -132,6 +136,8 @@ export type ServerMessage =
       glowcaps: number[];
       moth: number[] | null;
       giant: number[] | null;
+      /** Achievement events for you this tick (counted by your browser toward unlocking gear). */
+      feats: Feat[];
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

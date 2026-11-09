@@ -29,6 +29,15 @@
         <p id="lobby-code" class="code"></p>
         <button id="copy-link">Copy invite link</button>
         <ul id="lobby-players"></ul>
+        <div id="gear">
+          <p class="label">Your gear (kept between runs)</p>
+          <div id="gear-slots"></div>
+          <p id="gear-text" class="hint"></p>
+          <details id="gear-locked">
+            <summary>How to unlock more gear</summary>
+            <ul id="gear-unlocks"></ul>
+          </details>
+        </div>
         <div class="row">
           <button id="ready" class="primary">I'm ready</button>
           <button id="start" hidden>Start the run</button>
@@ -47,6 +56,7 @@
           <kbd>Space</kbd> lantern &middot; <kbd>E</kbd> interact &middot; push into a wall to dig (<kbd>Enter</kbd>) &middot; <kbd>Q</kbd> tunnel &middot; <kbd>R</kbd> mirror &middot; <kbd>T</kbd> talents
         </div>
         <div id="debug"></div>
+        <div id="toast" hidden></div>
         <div id="tip" hidden></div>
         <div id="point-hint" hidden></div>
       </div>

@@ -102,6 +102,9 @@ export function startServer(port: number): Promise<RunningServer> {
           if (err) fail(err);
           return;
         }
+        case 'gear':
+          if (room && memberId) room.setGear(memberId, msg.gear);
+          return;
         case 'learn':
           if (room && memberId && isTalentId(msg.talent)) room.learn(memberId, msg.talent);
           return;
