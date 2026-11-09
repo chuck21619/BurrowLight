@@ -19,6 +19,7 @@ import { GEAR, gearDef, type GearId, type GearSlot, type Loadout } from '@burrow
 import { gearIcon } from './gearIcons';
 import { GameView } from './game';
 import { setSoundMuted, sfx } from './sound';
+import { isTouchDevice, mountTouchControls, type TouchControls } from './touch';
 import { markTipSeen, muted, progress, recordFeats, setMuted, setTipsOn, setWearing, tipsOn, tipsSeen, unlocked, wearing } from './save';
 import { Net } from './net';
 
@@ -499,15 +500,17 @@ $('talents-close').addEventListener('click', () => toggleTalents(false));
 
 game.onPartyTalents = (party, you) => {
   const mine = party.get(you);
+  touchControls?.setMirrorAvailable(mine?.talents.has('mirrorPack') ?? false);
   myTalents = new Set(mine?.talents ?? []);
   myPoints = mine?.points ?? 0;
   partyTalents = new Map([...party].map(([id, p]) => [id, p.talents]));
   $('point-hint').hidden = myPoints <= 0;
-  $('point-hint').textContent = `${myPoints} talent point${myPoints > 1 ? 's' : ''}: press T`;
+  $('point-hint').textContent = `${myPoints} talent point${myPoints > 1 ? 's' : ''}: ${game.touch ? 'tap Talents' : 'press T'}`;
   if (!$('talents').hidden) renderTalentMenu();
 };
 
 let floorText = '';
+let touchControls: TouchControls | null = null;
 game.onObjective = ({ charged, total, open, gloom, pinned, intro, moth, mothOnStone, giant, giantStir, giantAwake }) => {
   const goal = intro
     ? 'Something in the dark is hungry for light...'
@@ -586,6 +589,11 @@ net.onMessage = async (msg) => {
       status(null);
       show('game');
       await game.mount($('canvas-host'));
+      if (isTouchDevice() && !touchControls) {
+        touchControls = mountTouchControls($('hud'));
+        game.touch = true;
+        game.onDigPrompt = (on) => touchControls?.setDigOffered(on);
+      }
       floorText = `Act ${actOf(msg.floor)}: ${actName(msg.floor)} · Floor ${msg.floor}${isBossFloor(msg.floor) ? ' (boss)' : ''} · Burrow ${msg.code}`;
       game.loadWelcome(msg);
       break;

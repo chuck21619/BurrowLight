@@ -1032,19 +1032,26 @@ export class GameView {
     // Spending a brace is a big decision: ask first.
     this.clearDigPrompt();
     const text = new Text({
-      text: `Dig under here? Uses ${me.braces === 1 ? 'your burrow brace' : '1 burrow brace'}. Press Enter`,
+      text: `Dig under here? Uses ${me.braces === 1 ? 'your burrow brace' : '1 burrow brace'}. ${this.touch ? 'Tap Dig!' : 'Press Enter'}`,
       style: { fontFamily: 'Trebuchet MS, sans-serif', fontSize: 13, fill: 0xf2cc8f, stroke: { color: 0x0b0a10, width: 3 } },
     });
     text.anchor.set(0.5, 1);
     text.zIndex = 9999;
     this.entityLayer.addChild(text);
     this.digPrompt = { dir: msg.dir, at: me.ty * this.w + me.tx, since: performance.now(), text };
+    this.onDigPrompt(true);
   }
 
   private clearDigPrompt(): void {
+    if (this.digPrompt) this.onDigPrompt(false);
     this.digPrompt?.text.destroy();
     this.digPrompt = null;
   }
+
+  /** Playing with on-screen touch controls (changes a few hints). */
+  touch = false;
+  /** A dig is on offer (or no longer): the touch controls show a Dig button. */
+  onDigPrompt: (on: boolean) => void = () => {};
 
   /** A short message that floats up from a critter and fades. */
   /** A little white speech bubble above a critter. */
@@ -1497,7 +1504,13 @@ export class GameView {
     const glide = this.intro > 0 || Math.hypot(tx - this.camX, ty - this.camY) > TILE * 2 ? Math.min(1, dtMs / 250) : 1;
     this.camX += (tx - this.camX) * glide;
     this.camY += (ty - this.camY) * glide;
-    this.world.position.set(Math.round(this.app.screen.width / 2 - this.camX), Math.round(this.app.screen.height / 2 - this.camY));
+    // Small screens (phones) zoom out so about 13 tiles fit across the short side.
+    const zoom = Math.min(1, Math.max(0.5, Math.min(this.app.screen.width, this.app.screen.height) / (13 * TILE)));
+    this.world.scale.set(zoom);
+    this.world.position.set(
+      Math.round(this.app.screen.width / 2 - this.camX * zoom),
+      Math.round(this.app.screen.height / 2 - this.camY * zoom),
+    );
     this.onDebug(`tick ${this.serverTick} · pending ${this.pending.length} · ${Math.round(this.app.ticker.FPS)} fps`);
   }
 
@@ -1653,7 +1666,14 @@ export class GameView {
       this.onTipSeen(this.lastTipId);
     }
     this.lastTipId = id;
-    this.onTip(pick?.[2] ?? null);
+    let text = pick?.[2] ?? null;
+    // On a phone, name the on-screen buttons instead of keys.
+    if (text && this.touch)
+      text = text
+        .replace(/Press Space/g, 'Tap Light')
+        .replace(/press E/g, 'tap Use')
+        .replace(/press Q/g, 'tap Tunnel');
+    this.onTip(text);
   }
 
   private mothOnStone(): boolean {

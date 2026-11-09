@@ -668,3 +668,160 @@ label.check {
   max-height: calc(100vh - 32px);
   overflow-y: auto;
 }
+
+/* ---- Touch screens ---- */
+
+body.touch #game,
+.touch-controls {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.touch-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.touch-controls > * {
+  pointer-events: auto;
+}
+
+.dpad {
+  position: absolute;
+  left: calc(16px + env(safe-area-inset-left));
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: rgba(43, 34, 56, 0.55);
+  border: 2px solid rgba(201, 184, 166, 0.35);
+  display: grid;
+  place-items: center;
+}
+
+.dpad::before {
+  content: '';
+  position: absolute;
+  inset: 22px;
+  border-radius: 50%;
+  border: 2px dashed rgba(201, 184, 166, 0.2);
+}
+
+.dpad-knob {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(242, 204, 143, 0.75);
+  box-shadow: 0 3px 0 rgba(20, 15, 31, 0.6);
+  transition: transform 60ms linear;
+}
+
+.touch-actions {
+  position: absolute;
+  right: calc(16px + env(safe-area-inset-right));
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(2, 64px);
+  gap: 10px;
+  justify-items: center;
+  align-items: end;
+}
+
+.touch-btn {
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: bold;
+  background: rgba(58, 47, 72, 0.85);
+  border: 2px solid var(--panel-edge);
+  color: var(--text);
+  touch-action: manipulation;
+}
+
+.touch-btn:active {
+  filter: brightness(1.4);
+}
+
+.touch-btn.big {
+  background: rgba(242, 204, 143, 0.9);
+  color: var(--accent-ink);
+  border-color: #c99d5c;
+}
+
+.touch-btn.dig {
+  grid-column: span 2;
+  width: 138px;
+  border-radius: 32px;
+  background: #e07a5f;
+  color: #fff;
+  border-color: #b85a42;
+}
+
+.touch-top {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  top: 64px;
+  display: flex;
+  gap: 6px;
+}
+
+.touch-btn.small {
+  width: auto;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 16px;
+  font-size: 12px;
+}
+
+/* Make room for the controls. */
+body.touch #tip {
+  bottom: 180px;
+}
+
+body.touch #point-hint {
+  top: 102px;
+  bottom: auto;
+  right: 12px;
+}
+
+body.touch #help {
+  display: none;
+}
+
+/* Narrow screens: banner across the top, party list and clock below it. */
+@media (max-width: 700px) {
+  #banner {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    white-space: normal;
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+
+  #party {
+    top: 64px;
+    min-width: 0;
+    max-width: 46vw;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  #timer {
+    top: 64px;
+    font-size: 13px;
+  }
+
+  body.touch .touch-top {
+    top: 100px;
+  }
+
+  body.touch #point-hint {
+    top: 138px;
+  }
+}
