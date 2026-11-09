@@ -323,6 +323,8 @@ describe('light prototype', () => {
     expect(a.lastAck).toBe(2); // the queued wait was dropped
     queueIntent(game, 'a', 3, { kind: 'wait' });
     expect(a.lastAck).toBe(3); // input while dazed is dropped too
+    setLantern(game, 'a', true);
+    expect(a.lit).toBe(false); // and the lantern can't be relit while seeing stars
     expect(a.queue.length).toBe(0);
     for (let i = 0; i < KO_TICKS; i++) step(game);
     queueIntent(game, 'a', 4, { kind: 'wait' });

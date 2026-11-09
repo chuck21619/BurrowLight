@@ -1070,7 +1070,7 @@ export class GameView {
   private toggleLantern(): void {
     const me = this.avatars.get(this.you);
     if (!me) return;
-    if (me.panic || this.intro > 0) return;
+    if (me.panic || me.ko > 0 || this.intro > 0) return;
     const on = !this.myLit;
     if (on && me.oil <= 0) {
       this.say(me, 'Out of oil');

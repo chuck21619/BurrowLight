@@ -480,7 +480,8 @@ export function queueIntent(state: GameState, playerId: string, seq: number, act
 /** Light or douse a lantern. Can't light it without oil. Applies straight away. */
 export function setLantern(state: GameState, playerId: string, on: boolean): void {
   const p = state.players.get(playerId);
-  if (p && !p.panic && !state.runOver && !inIntro(state)) p.lit = on && p.oil > 0;
+  // Not while panicking or dazed by a trap (the jolt knocked it out; you're seeing stars).
+  if (p && !p.panic && state.tick >= p.koUntil && !state.runOver && !inIntro(state)) p.lit = on && p.oil > 0;
 }
 
 export function removePlayer(state: GameState, playerId: string): void {
