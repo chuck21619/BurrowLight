@@ -610,6 +610,9 @@ export class GameView {
 
   /** Why a dig from here wouldn't work, as far as we can see; null if it might. */
   private digProblem(me: Avatar, dx: number, dy: number): string | null {
+    // Standing on a tunnel opening and pushing into its soil: you probably want to go through it.
+    const here = me.ty * this.w + me.tx;
+    for (const t of this.tunnels.values()) if (t.a === here || t.b === here) return 'Press Q to burrow through';
     if (me.braces <= 0) return 'No burrow braces left';
     let n = 1;
     while (n <= MAX_TUNNEL_SOIL && this.knownTile(me.tx + dx * n, me.ty + dy * n) === Tile.Soil) n++;
