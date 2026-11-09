@@ -17,7 +17,7 @@ import {
   MAX_OIL,
   planTunnel,
   DIG_TICKS,
-  ROOT_BRACES_PER_FLOOR,
+  BURROW_BRACES_PER_FLOOR,
   inIntro,
   gloomFootprint,
   GREAT_HEART_FULL,
@@ -878,9 +878,9 @@ describe('burrowing', () => {
     expect(beamCellOf(Tile.Soil)).toBe('wall');
   });
 
-  it('digging takes 3 seconds standing still, uses a root brace, and the tunnel goes both ways', () => {
+  it('digging takes 3 seconds standing still, uses a burrow brace, and the tunnel goes both ways', () => {
     const { game, a, dir, plan } = withSoil();
-    expect(a.braces).toBe(ROOT_BRACES_PER_FLOOR);
+    expect(a.braces).toBe(BURROW_BRACES_PER_FLOOR);
     queueIntent(game, 'a', 1, { kind: 'dig', dir });
     step(game);
     expect(a.digging).not.toBeNull();
@@ -889,7 +889,7 @@ describe('burrowing', () => {
     expect(game.tunnels.length).toBe(0); // still digging; can't act
     for (let i = 0; i < 3; i++) step(game);
     expect(game.tunnels).toEqual([{ a: plan.a, b: plan.b, owner: 'a' }]);
-    expect(a.braces).toBe(ROOT_BRACES_PER_FLOOR - 1);
+    expect(a.braces).toBe(BURROW_BRACES_PER_FLOOR - 1);
     for (let i = 0; i < 3; i++) step(game);
     queueIntent(game, 'a', 3, { kind: 'burrow' });
     step(game);
@@ -913,7 +913,7 @@ describe('burrowing', () => {
     expect(game.tunnels.length).toBe(1); // still there
   });
 
-  it('out of root braces, you cannot dig; a new floor brings a fresh brace', () => {
+  it('out of burrow braces, you cannot dig; a new floor brings a fresh brace', () => {
     const { game, a, dir } = withSoil();
     a.braces = 0;
     queueIntent(game, 'a', 1, { kind: 'dig', dir });
@@ -928,7 +928,7 @@ describe('burrowing', () => {
     }
     step(game);
     expect(game.descended).toBe(true);
-    expect(a.braces).toBe(ROOT_BRACES_PER_FLOOR);
+    expect(a.braces).toBe(BURROW_BRACES_PER_FLOOR);
     expect(game.tunnels.length).toBe(0);
   });
 

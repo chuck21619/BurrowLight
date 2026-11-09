@@ -66,7 +66,7 @@ interface Avatar {
   /** Ticks left digging (0 = not digging). */
   dig: number;
   digBar: Graphics;
-  /** Root braces left on this floor. */
+  /** Burrow braces left on this floor. */
   braces: number;
   /** 0–100 */
   jitters: number;
@@ -610,7 +610,7 @@ export class GameView {
 
   /** Why a dig from here wouldn't work, as far as we can see; null if it might. */
   private digProblem(me: Avatar, dx: number, dy: number): string | null {
-    if (me.braces <= 0) return 'No root braces left';
+    if (me.braces <= 0) return 'No burrow braces left';
     let n = 1;
     while (n <= MAX_TUNNEL_SOIL && this.knownTile(me.tx + dx * n, me.ty + dy * n) === Tile.Soil) n++;
     const out = this.tiles[(me.ty + dy * n) * this.w + me.tx + dx * n];
@@ -637,7 +637,10 @@ export class GameView {
     if (!me) return;
     if (me.panic || this.intro > 0) return;
     const on = !this.myLit;
-    if (on && me.oil <= 0) return;
+    if (on && me.oil <= 0) {
+      this.say(me, 'Out of oil');
+      return;
+    }
     this.myLit = on;
     this.litToggledAt = performance.now();
     this.send({ t: 'lantern', on });

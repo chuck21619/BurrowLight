@@ -25,7 +25,7 @@ import {
   START_OIL,
   SUNSHAFT_RADIUS,
   BEAM_STRENGTH,
-  ROOT_BRACES_PER_FLOOR,
+  BURROW_BRACES_PER_FLOOR,
   gloomDrain,
   GLOOM_BRIGHTNESS_WEIGHT,
   GLOOM_STEP,
@@ -88,7 +88,7 @@ export interface PlayerState {
   gloomTouchAt: number;
   /** A tunnel being dug: it opens at `until` between tile indices `a` and `b`. */
   digging: { until: number; a: number; b: number } | null;
-  /** Root braces left on this floor: each one shores up one tunnel. */
+  /** Burrow braces left on this floor: each one shores up one tunnel. */
   braces: number;
 }
 
@@ -199,7 +199,7 @@ export function createGame(seed: number, players: NewPlayer[], startFloor = 1): 
       panicDir: null,
       gloomTouchAt: -Infinity,
       digging: null,
-      braces: ROOT_BRACES_PER_FLOOR,
+      braces: BURROW_BRACES_PER_FLOOR,
     });
   });
   enterFloor(state, startFloor);
@@ -240,7 +240,7 @@ function enterFloor(state: GameState, n: number): void {
   state.tunnels = [];
   for (const p of state.players.values()) {
     p.digging = null;
-    p.braces = ROOT_BRACES_PER_FLOOR;
+    p.braces = BURROW_BRACES_PER_FLOOR;
   }
   state.introTorch = map.introTorch ? map.introTorch.y * map.w + map.introTorch.x : -1;
   state.introUntil = map.introTorch ? state.tick + BOSS_INTRO_MAX : 0;
@@ -297,7 +297,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   const tile = mapTile(state.map);
 
   for (const p of order) {
-    // A finished dig uses up a root brace and opens a permanent tunnel.
+    // A finished dig uses up a burrow brace and opens a permanent tunnel.
     if (p.digging && state.tick >= p.digging.until) {
       state.tunnels.push({ a: p.digging.a, b: p.digging.b, owner: p.id });
       p.braces = Math.max(0, p.braces - 1);

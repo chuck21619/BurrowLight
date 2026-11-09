@@ -183,7 +183,7 @@ game.onPartyChange = (players) => {
       name.textContent = `${info.name}${you ? ' (you)' : ''}${state}`;
       const brace = document.createElement('span');
       brace.className = 'braces';
-      brace.title = 'Root braces: each one digs a tunnel on this floor';
+      brace.title = 'Burrow braces: each one digs a tunnel on this floor';
       brace.textContent = `braces ${braces}`;
       const bar = document.createElement('div');
       bar.className = 'oil';

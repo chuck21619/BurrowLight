@@ -15,10 +15,10 @@ export const ActionCost = {
 /** Digging a tunnel under soft soil takes 3 s, standing still. */
 export const DIG_TICKS = 30;
 /**
- * Each tunnel needs a root brace to shore it up so it doesn't cave in. Every critter brings this
+ * Each tunnel needs a burrow brace to shore it up so it doesn't cave in. Every critter brings this
  * many to each floor; each digs one permanent tunnel that anyone can use. (Talents and gear can add more.)
  */
-export const ROOT_BRACES_PER_FLOOR = 1;
+export const BURROW_BRACES_PER_FLOOR = 1;
 
 export const BASE_SPEED = 100;
 
