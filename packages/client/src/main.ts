@@ -1,4 +1,4 @@
-import { MAX_OIL, normalizeCode, type LobbyPlayer, type ServerMessage } from '@burrowlight/shared';
+import { MAX_OIL, actName, actOf, isBossFloor, normalizeCode, type LobbyPlayer, type RunSummary, type ServerMessage } from '@burrowlight/shared';
 import { GameView } from './game';
 import { Net } from './net';
 
@@ -215,7 +215,36 @@ game.onTip = (tip) => {
   el.textContent = tip ?? '';
 };
 
-game.onRunOver = () => {
+let runEnded = false;
+game.onRunEnd = (s: RunSummary) => {
+  if (runEnded) return;
+  runEnded = true;
+  $('runover-title').textContent = s.won ? 'The Hearthlight is restored!' : 'Eek!';
+  $('runover-sub').textContent = s.won
+    ? 'You beat all three acts and carried the light home. Well done, critters.'
+    : `Everyone got the jitters at once, on floor ${s.floorReached} (${actName(s.floorReached)}).`;
+  const time = `${Math.floor(s.seconds / 60)}:${String(s.seconds % 60).padStart(2, '0')}`;
+  const rows: [string, string | number][] = [
+    ['Floors cleared', s.floorsCleared],
+    ['Heartstones lit', s.heartstones],
+    ['Time', time],
+    ['Lantern light burned', `${s.oilSeconds} s`],
+    ['Traps sprung', s.trapsSprung],
+    ['Panics', s.panics],
+    ['Tunnels dug', s.tunnels],
+    ['Gloom pinned', s.pins],
+  ];
+  $('runover-stats').replaceChildren(
+    ...rows.map(([k, v]) => {
+      const li = document.createElement('li');
+      const a = document.createElement('span');
+      a.textContent = k;
+      const b = document.createElement('span');
+      b.textContent = String(v);
+      li.append(a, b);
+      return li;
+    }),
+  );
   $('runover').hidden = false;
 };
 $('again').addEventListener('click', () => {
@@ -266,7 +295,7 @@ net.onMessage = async (msg) => {
       status(null);
       show('game');
       await game.mount($('canvas-host'));
-      floorText = `Rootcellar · Floor ${msg.floor} · Burrow ${msg.code}`;
+      floorText = `Act ${actOf(msg.floor)}: ${actName(msg.floor)} · Floor ${msg.floor}${isBossFloor(msg.floor) ? ' (boss)' : ''} · Burrow ${msg.code}`;
       game.loadWelcome(msg);
       break;
     case 'tick':

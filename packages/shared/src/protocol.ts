@@ -1,4 +1,5 @@
 import type { Action } from './rules';
+import type { RunSummary } from './sim';
 
 // ---- Client -> server ----
 export type ClientMessage =
@@ -88,6 +89,8 @@ export type ServerMessage =
       intro: number;
       /** Every critter's tunnel: [endA, endB, ownerId]. */
       tunnels: [number, number, string][];
+      /** Set once the run has ended (won or lost). */
+      summary: RunSummary | null;
     }
   | {
       t: 'tick';
@@ -108,6 +111,7 @@ export type ServerMessage =
       torches: number[];
       intro: number;
       tunnels: [number, number, string][];
+      summary: RunSummary | null;
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

@@ -26,6 +26,7 @@ import {
   type LightSource,
   type PlayerInfo,
   type PlayerPos,
+  type RunSummary,
   type ServerMessage,
 } from '@burrowlight/shared';
 import { SRC, makeTextures, type Textures } from './textures';
@@ -202,7 +203,7 @@ export class GameView {
 
   onPartyChange: (players: PartyMember[]) => void = () => {};
   onObjective: (o: Objective) => void = () => {};
-  onRunOver: () => void = () => {};
+  onRunEnd: (summary: RunSummary) => void = () => {};
   /** A short how-to-play hint for the first floors, or null. */
   onTip: (tip: string | null) => void = () => {};
   private floor = 1;
@@ -298,7 +299,7 @@ export class GameView {
     this.applyPositions(msg.pos, msg.ack, true);
     this.lightDirty = true;
     this.emitObjective();
-    if (msg.runOver) this.onRunOver();
+    if (msg.summary) this.onRunEnd(msg.summary);
   }
 
   applyTick(msg: Tick): void {
@@ -321,7 +322,7 @@ export class GameView {
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
     this.emitObjective();
-    if (msg.runOver) this.onRunOver();
+    if (msg.summary) this.onRunEnd(msg.summary);
   }
 
   private setGloom(packed: number[] | null, snap: boolean): void {

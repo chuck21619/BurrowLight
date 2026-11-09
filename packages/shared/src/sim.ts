@@ -26,6 +26,8 @@ import {
   START_OIL,
   SUNSHAFT_RADIUS,
   BEAM_STRENGTH,
+  FINAL_FLOOR,
+  TICK_MS,
   BURROW_BRACES_PER_FLOOR,
   gloomDrain,
   GLOOM_BRIGHTNESS_WEIGHT,
@@ -156,6 +158,10 @@ export interface GameState {
   descended: boolean;
   /** Everyone panicked at the same time. */
   runOver: boolean;
+  /** The party beat floor 9's boss and went down its ladder: the Hearthlight is restored. */
+  runWon: boolean;
+  /** Running totals for the end-of-run summary. */
+  stats: RunStats;
   /** The boss, on boss floors until the Great Heartstone is full. */
   gloom: GloomState | null;
   /** Torch tile index -> lit. */
@@ -166,6 +172,51 @@ export interface GameState {
   introTorch: number;
   /** Every tunnel dug on this floor. */
   tunnels: Tunnel[];
+}
+
+export interface RunStats {
+  floorsCleared: number;
+  heartstones: number;
+  trapsSprung: number;
+  panics: number;
+  tunnels: number;
+  /** Ticks of lantern oil burned by the whole party. */
+  oilBurned: number;
+  /** Times the Gloom was pinned in a sunbeam. */
+  pins: number;
+  startTick: number;
+}
+
+/** The end-of-run summary sent to everyone. */
+export interface RunSummary {
+  won: boolean;
+  floorReached: number;
+  floorsCleared: number;
+  /** Seconds the run took. */
+  seconds: number;
+  heartstones: number;
+  trapsSprung: number;
+  panics: number;
+  tunnels: number;
+  /** Seconds of lantern light burned by the party. */
+  oilSeconds: number;
+  pins: number;
+}
+
+export function runSummary(state: GameState): RunSummary {
+  const s = state.stats;
+  return {
+    won: state.runWon,
+    floorReached: state.floor,
+    floorsCleared: s.floorsCleared,
+    seconds: Math.round(((state.tick - s.startTick) * TICK_MS) / 1000),
+    heartstones: s.heartstones,
+    trapsSprung: s.trapsSprung,
+    panics: s.panics,
+    tunnels: s.tunnels,
+    oilSeconds: Math.round(s.oilBurned / 10),
+    pins: s.pins,
+  };
 }
 
 export interface NewPlayer {
@@ -181,6 +232,8 @@ export function createGame(seed: number, players: NewPlayer[], startFloor = 1): 
     tick: 0,
     players: new Map<string, PlayerState>(),
     runOver: false,
+    runWon: false,
+    stats: { floorsCleared: 0, heartstones: 0, trapsSprung: 0, panics: 0, tunnels: 0, oilBurned: 0, pins: 0, startTick: 0 },
   } as GameState;
   players.forEach((p, i) => {
     state.players.set(p.id, {
@@ -289,7 +342,7 @@ export interface StepOptions {
 
 /** Advance one tick. */
 export function step(state: GameState, opts: StepOptions = {}): void {
-  if (state.runOver) return;
+  if (state.runOver || state.runWon) return;
   state.tick++;
   state.newlyExplored = [];
   state.newlyRevealed = [];
@@ -301,6 +354,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     // A finished dig uses up a burrow brace, opens a permanent tunnel, and the digger pops out the far end.
     if (p.digging && state.tick >= p.digging.until) {
       state.tunnels.push({ a: p.digging.a, b: p.digging.b, owner: p.id });
+      state.stats.tunnels++;
       p.braces = Math.max(0, p.braces - 1);
       p.x = p.digging.b % state.map.w;
       p.y = Math.floor(p.digging.b / state.map.w);
@@ -366,6 +420,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     if (state.traps.has(here)) {
       // Snap! Stars circle your head, and the jolt knocks your lantern out.
       p.koUntil = state.tick + KO_TICKS;
+      state.stats.trapsSprung++;
       p.lit = false;
       p.readyAt = p.koUntil;
       clearQueue(p);
@@ -391,6 +446,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   for (const p of order) {
     if (!p.lit) continue;
     p.oil = Math.max(0, p.oil - OIL_PER_TICK);
+    state.stats.oilBurned += OIL_PER_TICK;
     if (p.oil === 0) p.lit = false;
   }
 
@@ -412,6 +468,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   }
   if (!state.exitOpen && state.hearts.every((h) => h.charge >= h.max)) {
     state.exitOpen = true;
+    state.stats.heartstones += state.hearts.length;
     state.gloom = null; // sun-soaked and content, it puffs away
   }
 
@@ -419,6 +476,11 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     const present = order.filter((p) => opts.isPresent?.(p.id) ?? true);
     const s = state.map.stairs;
     if (present.length > 0 && present.every((p) => p.x === s.x && p.y === s.y)) {
+      state.stats.floorsCleared++;
+      if (state.floor >= FINAL_FLOOR) {
+        state.runWon = true; // the Hearthlight is restored
+        return;
+      }
       for (const p of order) p.oil = Math.min(MAX_OIL, p.oil + OIL_PER_FLOOR);
       enterFloor(state, state.floor + 1);
       state.descended = true;
@@ -443,6 +505,7 @@ function updateJitters(state: GameState, order: PlayerState[]): void {
     }
     if (!p.panic && p.jitters >= JITTERS_MAX) {
       p.panic = true;
+      state.stats.panics++;
       p.lit = false;
       p.panicDir = null;
       p.digging = null; // too scared to keep digging
@@ -532,6 +595,7 @@ function updateGloom(state: GameState): boolean {
   settle();
   if (g.pinned) {
     if (!wasPinned) {
+      state.stats.pins++;
       g.nextWriggleAt = state.tick + GLOOM_WRIGGLE[g.restless]!;
       // Caught while chasing someone: it loses interest in them for a while, so it doesn't hound one critter all fight.
       if (g.target && g.target !== 'stone' && g.target !== 'torch') g.ignore.set(g.target, state.tick + GLOOM_IGNORE_TICKS);

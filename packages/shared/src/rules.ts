@@ -53,6 +53,12 @@ export const KO_TICKS = 100;
 export const HEART_FULL = 60;
 export const HEART_FADE = 1;
 // ---- The Gloom (act 1 boss) ----
+/** A run is three acts of three floors; beating floor 9's boss and gathering on its ladder wins. */
+export const FINAL_FLOOR = 9;
+export const actOf = (floor: number): number => Math.ceil(floor / 3);
+/** Placeholder biome names until acts 2 and 3 are designed. */
+export const ACT_NAMES = ['Rootcellar', 'Glowcap Grotto', "Giant's Kitchen"] as const;
+export const actName = (floor: number): string => ACT_NAMES[Math.min(ACT_NAMES.length, actOf(floor)) - 1]!;
 /** Floors 3, 6 and 9 end in a boss room. */
 export const isBossFloor = (floor: number): boolean => floor % 3 === 0;
 /** The Gloom moves one tile every this many ticks: slower than a walking critter (2), so you can lead it. */

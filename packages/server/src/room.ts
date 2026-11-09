@@ -18,6 +18,7 @@ import {
   packTorches,
   packTunnels,
   digVerdict,
+  runSummary,
   step,
   type Action,
   type GameState,
@@ -174,6 +175,7 @@ export class Room {
     const tiles = packTiles(game, game.newlyExplored);
     const heartCharge = game.hearts.map((h) => Math.round(h.charge * 10) / 10);
     const mirrors = packMirrors(game);
+    const summary = game.runOver || game.runWon ? runSummary(game) : null;
     for (const m of this.members.values()) {
       const p = game.players.get(m.id);
       if (!m.peer || !p) continue;
@@ -192,6 +194,7 @@ export class Room {
         torches: packTorches(game),
         intro: Math.max(0, game.introUntil - game.tick),
         tunnels: packTunnels(game),
+        summary,
       });
     }
   }
@@ -252,6 +255,7 @@ export class Room {
       torches: packTorches(game),
       intro: Math.max(0, game.introUntil - game.tick),
       tunnels: packTunnels(game),
+      summary: game.runOver || game.runWon ? runSummary(game) : null,
     });
   }
 

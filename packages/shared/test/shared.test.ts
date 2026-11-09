@@ -15,6 +15,9 @@ import {
   computeLight,
   setLantern,
   MAX_OIL,
+  FINAL_FLOOR,
+  runSummary,
+  actName,
   planTunnel,
   digVerdict,
   isDiggableGround,
@@ -1009,5 +1012,57 @@ describe('burrowing', () => {
     const spot = withSoil();
     spot.game.map.tiles[spot.plan.b] = Tile.StoneFloor;
     expect(planTunnel(spot.game, spot.a.x, spot.a.y, spot.dir)).toBeNull();
+  });
+});
+
+describe('winning and the run summary', () => {
+  it('beating floor 9 and gathering on its ladder wins the run; nothing moves after', () => {
+    const game = createGame(3, [{ id: 'a', name: 'A', color: 1 }], FINAL_FLOOR);
+    game.introUntil = 0;
+    game.exitOpen = true;
+    game.gloom = null;
+    const a = game.players.get('a')!;
+    a.x = game.map.stairs.x;
+    a.y = game.map.stairs.y;
+    step(game);
+    expect(game.runWon).toBe(true);
+    expect(game.floor).toBe(FINAL_FLOOR); // no floor 10
+    const s = runSummary(game);
+    expect(s.won).toBe(true);
+    expect(s.floorsCleared).toBe(1);
+    const tick = game.tick;
+    step(game);
+    expect(game.tick).toBe(tick);
+  });
+
+  it('counts traps, panics, tunnels, oil and Heartstones for the summary', () => {
+    const game = createGame(7, [{ id: 'a', name: 'A', color: 1 }]);
+    const a = game.players.get('a')!;
+    setLantern(game, 'a', true);
+    for (let i = 0; i < 10; i++) step(game);
+    expect(runSummary(game).oilSeconds).toBe(1);
+    // Spring a trap.
+    const dir = findOpenDir(game, 'a');
+    game.traps.add((a.y + DIRS[dir][1]) * game.map.w + a.x + DIRS[dir][0]);
+    queueIntent(game, 'a', 1, { kind: 'move', dir });
+    step(game);
+    expect(runSummary(game).trapsSprung).toBe(1);
+    // Panic.
+    a.jitters = JITTERS_MAX;
+    game.map.sunshafts = [];
+    game.map.emitters = [];
+    for (const k of game.torches.keys()) game.torches.set(k, false);
+    a.lit = false;
+    a.x = game.map.stairs.x; // somewhere dark, away from the start's sunshaft
+    a.y = game.map.stairs.y;
+    step(game);
+    expect(runSummary(game).panics).toBe(1);
+    expect(runSummary(game).won).toBe(false);
+  });
+
+  it('act names follow the floors', () => {
+    expect(actName(1)).toBe('Rootcellar');
+    expect(actName(4)).toBe('Glowcap Grotto');
+    expect(actName(9)).toBe("Giant's Kitchen");
   });
 });
