@@ -281,10 +281,12 @@ describe('light prototype', () => {
     const dir = findOpenDir(game, 'a');
     const target = (a.y + DIRS[dir][1]) * game.map.w + a.x + DIRS[dir][0];
     game.traps.add(target);
+    setLantern(game, 'a', true);
     queueIntent(game, 'a', 1, { kind: 'move', dir });
     queueIntent(game, 'a', 2, { kind: 'wait' });
     step(game);
     expect(game.revealedTraps.has(target)).toBe(true);
+    expect(a.lit).toBe(false); // the trap knocked the lantern out
     expect(a.koUntil).toBe(game.tick + KO_TICKS);
     expect(a.lastAck).toBe(2); // the queued wait was dropped
     queueIntent(game, 'a', 3, { kind: 'wait' });

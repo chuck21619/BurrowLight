@@ -353,8 +353,9 @@ export function step(state: GameState, opts: StepOptions = {}): void {
 
     const here = p.y * state.map.w + p.x;
     if (state.traps.has(here)) {
-      // Snap! Stars circle your head; your lantern keeps burning while you're out.
+      // Snap! Stars circle your head, and the jolt knocks your lantern out.
       p.koUntil = state.tick + KO_TICKS;
+      p.lit = false;
       p.readyAt = p.koUntil;
       clearQueue(p);
       reveal(state, here);
