@@ -24,6 +24,7 @@ import {
   packLocks,
   packGlowcaps,
   packMoth,
+  packGiant,
   type TalentId,
   step,
   type Action,
@@ -213,6 +214,7 @@ export class Room {
         locks: packLocks(game),
         glowcaps: packGlowcaps(game),
         moth: packMoth(game),
+        giant: packGiant(game),
       });
     }
   }
@@ -278,6 +280,7 @@ export class Room {
       locks: packLocks(game),
       glowcaps: packGlowcaps(game),
       moth: packMoth(game),
+      giant: packGiant(game),
     });
   }
 

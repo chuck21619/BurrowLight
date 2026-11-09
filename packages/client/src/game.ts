@@ -104,6 +104,10 @@ export interface Objective {
   open: boolean;
   /** On a boss floor: is the Gloom here, and is it pinned? */
   gloom: boolean;
+  /** The Sleeping Giant is here (act 3 boss): how stirred he is (0–100), and whether he's awake. */
+  giant: boolean;
+  giantStir: number;
+  giantAwake: boolean;
   /** The Mothmother is here (act 2 boss), and whether she's sitting on the Great Heartstone. */
   moth: boolean;
   mothOnStone: boolean;
@@ -185,9 +189,13 @@ export class GameView {
   private glowcaps = new Map<number, number>();
   private glowcapSprites = new Map<number, Sprite>();
   private everLitGlowcap = false;
+  private giantTipDone = false;
   /** The Mothmother: server state plus a smoothed drawing position. */
   private moth: { x: number; y: number; landed: boolean; face: number; restless: number; sx: number; sy: number } | null = null;
   private mothView: { root: Container; wings: Graphics[] } | null = null;
+  /** The Sleeping Giant: head position, stirring 0–100, awake. */
+  private giant: { x: number; y: number; stir: number; awake: boolean } | null = null;
+  private giantView: { root: Container; face: Graphics; bar: Graphics; zzz: Text[] } | null = null;
   /** Has this player ever seen a pen door open (for the lock tip)? */
   private doorOpenedOnce = false;
   /** Ticks left in a boss intro (input is ignored and the camera watches the Gloom). */
@@ -320,6 +328,10 @@ export class GameView {
     this.mothView = null;
     this.moth = null;
     this.setMoth(msg.moth, true);
+    this.giantView?.root.destroy({ children: true });
+    this.giantView = null;
+    this.giant = null;
+    this.setGiant(msg.giant);
 
     for (const a of this.avatars.values()) a.root.destroy({ children: true });
     this.avatars.clear();
@@ -356,6 +368,7 @@ export class GameView {
     this.setGloom(msg.gloom, false);
     this.setGlowcaps(msg.glowcaps);
     this.setMoth(msg.moth, false);
+    this.setGiant(msg.giant);
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
     this.emitObjective();
@@ -383,6 +396,86 @@ export class GameView {
         if (left > 0) this.everLitGlowcap = true;
       }
     }
+  }
+
+  private setGiant(packed: number[] | null): void {
+    if (!packed) {
+      this.giantView?.root.destroy({ children: true });
+      this.giantView = null;
+      this.giant = null;
+      return;
+    }
+    const [x, y, stir, awake] = packed as [number, number, number, number];
+    const prev = this.giant;
+    this.giant = { x, y, stir, awake: awake === 1 };
+    if (!this.giantView) this.giantView = this.makeGiantView(x, y);
+    if (!prev || prev.awake !== this.giant.awake || Math.floor(prev.stir / 34) !== Math.floor(stir / 34)) this.drawGiantFace();
+    const bar = this.giantView.bar;
+    bar.clear();
+    bar.roundRect(-30, -62, 60, 7, 3).fill(0x1a1524);
+    if (stir > 0) bar.roundRect(-30, -62, (60 * stir) / 100, 7, 3).fill(stir > 66 ? 0xf08a7a : stir > 33 ? 0xf2cc8f : 0xa8d8a0);
+  }
+
+  /** A huge sleepy face peeking up from the bottom of the head tiles, in a striped nightcap. */
+  private makeGiantView(x: number, y: number): { root: Container; face: Graphics; bar: Graphics; zzz: Text[] } {
+    const root = new Container();
+    root.position.set((x + 1.5) * TILE, (y + 1) * TILE);
+    const face = new Graphics();
+    const bar = new Graphics();
+    const zzz = [0, 1, 2].map((k) => {
+      const t = new Text({ text: 'z', style: { fontFamily: 'Trebuchet MS', fontSize: 16 + k * 5, fill: 0xe8dcff, fontWeight: 'bold' } });
+      t.anchor.set(0.5);
+      root.addChild(t);
+      return t;
+    });
+    root.addChildAt(face, 0);
+    root.addChild(bar);
+    root.zIndex = 0.5;
+    this.entityLayer.addChild(root);
+    return { root, face, bar, zzz };
+  }
+
+  private drawGiantFace(): void {
+    const g = this.giant;
+    const v = this.giantView;
+    if (!g || !v) return;
+    const f = v.face;
+    const W = TILE * 1.6;
+    f.clear();
+    f.ellipse(0, 6, W, TILE * 1.1).fill(0xe8b896); // big round face
+    f.ellipse(-W * 0.62, 18, 14, 9).fill({ color: 0xf08a7a, alpha: 0.6 }); // rosy cheeks
+    f.ellipse(W * 0.62, 18, 14, 9).fill({ color: 0xf08a7a, alpha: 0.6 });
+    f.moveTo(-W, -14).lineTo(0, -TILE * 1.25).lineTo(W, -14).closePath().fill(0x6a5acd); // nightcap
+    f.rect(-W, -18, W * 2, 10).fill(0xf4ead8);
+    if (g.awake) {
+      for (const ex of [-22, 22]) {
+        f.circle(ex, 4, 11).fill(0xffffff);
+        f.circle(ex, 6, 5).fill(0x2a2030);
+      }
+      f.ellipse(0, 34, 14, 10).fill(0x5a2a2a); // "WHO'S THERE?"
+    } else {
+      const twitch = g.stir > 66 ? 4 : g.stir > 33 ? 2 : 0; // eyebrows scrunch as he stirs
+      for (const ex of [-22, 22]) {
+        f.moveTo(ex - 11, 4).quadraticCurveTo(ex, 12, ex + 11, 4).stroke({ color: 0x5a3a2a, width: 3 });
+        f.moveTo(ex - 10, -8 + twitch).lineTo(ex + 10, -8 - twitch * Math.sign(ex)).stroke({ color: 0x5a3a2a, width: 3 });
+      }
+      f.ellipse(0, 30, 7, 5).fill(0x8a4a3a); // snoring mouth
+    }
+  }
+
+  /** Zzz float up while he sleeps; he wobbles harder as he stirs. */
+  private drawGiant(now: number): void {
+    const g = this.giant;
+    const v = this.giantView;
+    if (!g || !v) return;
+    const shake = g.awake ? Math.sin(now / 30) * 3 : g.stir > 66 ? Math.sin(now / 60) * 1.5 : 0;
+    v.face.position.set(shake, 0);
+    v.zzz.forEach((t, k) => {
+      const phase = ((now / 1400 + k / 3) % 1 + 1) % 1;
+      t.visible = !g.awake;
+      t.position.set(30 + phase * 30, -30 - phase * 50);
+      t.alpha = 1 - phase;
+    });
   }
 
   private setMoth(packed: number[] | null, snap: boolean): void {
@@ -1224,6 +1317,7 @@ export class GameView {
 
     this.drawGloom(now, dtMs);
     this.drawMoth(now, dtMs);
+    this.drawGiant(now);
 
     if (this.digPrompt) {
       const mine = this.avatars.get(this.you);
@@ -1381,6 +1475,9 @@ export class GameView {
       if (this.gateSeen && this.tunnels.size === 0) tip = 'That Heartstone is fenced in. Walk into the gate and hold to dig under it.';
       else if (this.tunnels.size > 0 && !this.usedTunnelKey)
         tip = 'You came out the other side! To go back through, stand on a tunnel hole and press Q.';
+    } else if (this.giant && unfinished && !this.giantTipDone) {
+      tip = 'Shh! Light on the Giant\'s face stirs him. Light the Great Heartstone from the shadows: behind counters, or with a sunbeam.';
+      if (this.giant.stir > 0 || this.hearts.some((h) => h.charge > h.max / 3)) this.giantTipDone = true;
     } else if (this.floor >= 4 && !this.everLitGlowcap && [...this.glowcapSprites.keys()].some((i) => this.tiles[i] !== UNKNOWN)) {
       tip = this.moth
         ? 'The Mothmother loves light! Light glowcaps away from the Great Heartstone to lure her off it.'
@@ -1412,6 +1509,9 @@ export class GameView {
       open: this.open,
       gloom: this.gloom !== null,
       moth: this.moth !== null,
+      giant: this.giant !== null,
+      giantStir: this.giant?.stir ?? 0,
+      giantAwake: this.giant?.awake ?? false,
       mothOnStone: this.mothOnStone(),
       pinned: this.gloom?.pinned ?? false,
       intro: this.intro > 0,

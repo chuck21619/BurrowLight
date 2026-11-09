@@ -350,11 +350,17 @@ game.onPartyTalents = (party, you) => {
 };
 
 let floorText = '';
-game.onObjective = ({ charged, total, open, gloom, pinned, intro, moth, mothOnStone }) => {
+game.onObjective = ({ charged, total, open, gloom, pinned, intro, moth, mothOnStone, giant, giantStir, giantAwake }) => {
   const goal = intro
     ? 'Something in the dark is hungry for light...'
     : open
     ? 'The hatch is open! Everyone gather on the ladder.'
+    : giant
+      ? giantAwake
+        ? 'WHO TURNED ON THE LIGHTS?! (He blew them all out.)'
+        : giantStir > 50
+          ? 'Shh! The Giant is stirring. Get the light off his face!'
+          : 'Charge the Great Heartstone without waking the Giant: keep light off his face'
     : moth
       ? mothOnStone
         ? 'The Mothmother is sipping the Great Heartstone! Light glowcaps to lure her away'

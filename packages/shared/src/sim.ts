@@ -17,6 +17,8 @@ import {
   isDiggableGround,
   generateBossFloor,
   generateMothFloor,
+  generateGiantFloor,
+  giantFace,
   generateFloor,
   isWalkable,
   spawnPoints,
@@ -66,6 +68,10 @@ import {
   MOTH_BORED_TICKS,
   MOTH_DRAIN,
   MOTH_GLOWCAP_BRIGHTNESS,
+  GIANT_STIR_MAX,
+  GIANT_SETTLE,
+  GIANT_KEEPS,
+  GIANT_AWAKE_TICKS,
   JITTERS_CALM,
   JITTERS_DARK,
   JITTERS_DARK_WITH_FRIEND,
@@ -208,6 +214,22 @@ export interface GameState {
   glowcaps: Map<number, number>;
   /** The act 2 boss, until the Great Heartstone is full. */
   moth: MothState | null;
+  /** The act 3 boss, until the Great Heartstone is full. */
+  giant: GiantState | null;
+}
+
+/** The Sleeping Giant: light on his face stirs him; a full meter wakes him and he blows out every light. */
+export interface GiantState {
+  /** Top-left tile of his head (3×2). */
+  x: number;
+  y: number;
+  /** The floor tiles in front of his face. */
+  face: number[];
+  stir: number;
+  /** Awake (grumbling) until this tick. */
+  awakeUntil: number;
+  /** Times he woke up this fight. */
+  wakes: number;
 }
 
 /** The Mothmother: a big moth (2×2, (x, y) its top-left tile) that flies to lights and lands on them. */
@@ -336,7 +358,9 @@ function enterFloor(state: GameState, n: number): void {
   const map = isBossFloor(n)
     ? actOf(n) === 2
       ? generateMothFloor(hashSeed(state.seed), n)
-      : generateBossFloor(hashSeed(state.seed), n)
+      : actOf(n) === 3
+        ? generateGiantFloor(hashSeed(state.seed), n)
+        : generateBossFloor(hashSeed(state.seed), n)
     : generateFloor(hashSeed(state.seed), n, heartsForParty(state.players.size));
   state.floor = n;
   state.map = map;
@@ -345,7 +369,8 @@ function enterFloor(state: GameState, n: number): void {
   state.traps = new Set(map.traps);
   state.revealedTraps = new Set();
   state.newlyRevealed = [];
-  const great = Boolean(map.gloomStart || map.mothStart);
+  const great = Boolean(map.gloomStart || map.mothStart || map.giant);
+  state.giant = map.giant ? { ...map.giant, face: giantFace(map, map.giant), stir: 0, awakeUntil: 0, wakes: 0 } : null;
   state.hearts = map.hearts.map((h) => ({ x: h.x, y: h.y, charge: 0, max: great ? GREAT_HEART_FULL : HEART_FULL }));
   state.glowcaps = new Map(map.glowcaps.map((c) => [c.y * map.w + c.x, 0]));
   state.moth = map.mothStart
@@ -543,6 +568,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   // A snuffed lantern or eaten torch stops giving light this very tick.
   if (gloomTouches(state, order) || gloomMoved) updateLight(state);
   if (updateMoth(state, order)) updateLight(state);
+  if (updateGiant(state, order)) updateLight(state);
   updateJitters(state, order);
 
   const g = state.gloom;
@@ -563,6 +589,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     state.stats.heartstones += state.hearts.length;
     state.gloom = null; // sun-soaked and content, it puffs away
     state.moth = null; // dazzled, she flutters off up the shaft
+    state.giant = null; // he rolls over and sleeps on, smiling
   }
 
   if (state.exitOpen) {
@@ -924,6 +951,39 @@ function updateMoth(state: GameState, order: PlayerState[]): boolean {
   m.x = Math.min(map.w - 3, Math.max(1, m.x + dx));
   m.y = Math.min(map.h - 3, Math.max(1, m.y + dy));
   return false;
+}
+
+/**
+ * The Sleeping Giant: light falling on the floor in front of his face stirs him (more light, faster);
+ * in the dark he settles. A full meter wakes him: he blows out every lantern, torch and glowcap, the
+ * gust gives everyone the Jitters, and the Great Heartstone loses a third of its charge. Then he
+ * grumbles for a moment and dozes off again. Returns true if lights changed.
+ */
+function updateGiant(state: GameState, order: PlayerState[]): boolean {
+  const g = state.giant;
+  if (!g) return false;
+  if (state.tick < g.awakeUntil) return false;
+  const light = g.face.reduce((sum, i) => sum + state.light.level[i]!, 0);
+  g.stir = light > 0 ? Math.min(GIANT_STIR_MAX, g.stir + light) : Math.max(0, g.stir - GIANT_SETTLE);
+  if (g.stir < GIANT_STIR_MAX) return false;
+  // WHO TURNED ON THE LIGHTS? *whoosh*
+  g.stir = 0;
+  g.wakes++;
+  g.awakeUntil = state.tick + GIANT_AWAKE_TICKS;
+  for (const p of order) {
+    p.lit = false;
+    p.jitters = Math.min(JITTERS_MAX, p.jitters + JITTERS_MAX / 3);
+  }
+  for (const k of state.torches.keys()) state.torches.set(k, false);
+  for (const k of state.glowcaps.keys()) state.glowcaps.set(k, 0);
+  for (const h of state.hearts) h.charge *= GIANT_KEEPS;
+  return true;
+}
+
+/** The Sleeping Giant for the wire: [x, y, stir 0–100, awake], or null. */
+export function packGiant(state: GameState): number[] | null {
+  const g = state.giant;
+  return g ? [g.x, g.y, Math.round((g.stir / GIANT_STIR_MAX) * 100), state.tick < g.awakeUntil ? 1 : 0] : null;
 }
 
 /** The Mothmother for the wire: [x, y, landed, face, restless], or null. */

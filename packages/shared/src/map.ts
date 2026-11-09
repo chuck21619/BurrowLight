@@ -1,4 +1,5 @@
 import { reflect, traceBeam, type BeamCell, type Emitter, type MirrorOrient } from './beam';
+import { computeFov } from './fov';
 import { createRng, hashSeed, type Rng } from './rng';
 
 export const Tile = {
@@ -67,6 +68,13 @@ export interface FloorMap {
   glowcaps: Point[];
   /** Act 2 boss rooms: where the Mothmother (2×2, top-left corner) starts. */
   mothStart?: Point;
+  /** Act 3 boss rooms: the Sleeping Giant's head (3×2 wall tiles, top-left corner) against the top wall. */
+  giant?: Point;
+}
+
+/** The floor tiles in front of the Giant's face: light on any of them stirs him. */
+export function giantFace(map: { w: number }, head: Point): number[] {
+  return [0, 1, 2].map((dx) => (head.y + 2) * map.w + head.x + dx);
 }
 
 /** A door and what opens it: a pressure plate (held) or a sun gem (lit by a sunbeam, opens for good). */
@@ -790,6 +798,128 @@ function tryBossRoom(rng: Rng): FloorMap | null {
     locks: [],
     glowcaps: [],
   };
+}
+
+/**
+ * The act 3 boss room: the Giant's kitchen. His head lies against the top wall, snoring; the Great
+ * Heartstone sits a few steps from his face, half hidden behind kitchen counters. Light on his face
+ * stirs him, so the party has to light the stone from the shadows: from behind counters, with a
+ * mirror puzzle that routes a sunbeam around him, and with torches set well away from him.
+ * Guaranteed: several spots where a plain lantern lights the stone without touching his face.
+ */
+export function generateGiantFloor(seed: number, floor: number): FloorMap {
+  const rng = createRng(hashSeed(seed, floor, 0x61a));
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const map = tryGiantRoom(rng);
+    if (map) return map;
+  }
+  throw new Error(`could not generate giant floor for seed ${seed}`);
+}
+
+/** Spots a lantern (radius 4) could stand on to light the Great Heartstone without lighting the Giant's face. */
+export function giantSafeSpots(map: FloorMap, radius = 4): number[] {
+  const { w, h, tiles } = map;
+  const heart = map.hearts[0]!;
+  const face = new Set(giantFace(map, map.giant!));
+  const blocks = (x: number, y: number) => x < 0 || y < 0 || x >= w || y >= h || blocksSight(tiles[y * w + x]!);
+  const reach = distanceMap(tiles, w, h, map.entrance);
+  const out: number[] = [];
+  for (let i = 0; i < tiles.length; i++) {
+    if (!isWalkable(tiles[i]!) || reach[i]! < 0) continue;
+    let stone = false;
+    let wakes = false;
+    computeFov(i % w, Math.floor(i / w), radius, blocks, (x, y) => {
+      const j = y * w + x;
+      if (x === heart.x && y === heart.y) stone = true;
+      if (face.has(j)) wakes = true;
+    });
+    if (stone && !wakes) out.push(i);
+  }
+  return out;
+}
+
+function tryGiantRoom(rng: Rng): FloorMap | null {
+  const w = rng.int(20, 24);
+  const h = rng.int(13, 15);
+  const tiles = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) tiles[y * w + x] = Tile.Floor;
+  const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const entrance = { x: 2, y: rng.int(Math.floor(h / 2), h - 3) };
+  const stairs = { x: w - 2, y: h - 2 };
+  const giant = { x: rng.int(7, w - 10), y: 1 };
+  for (let y = 1; y <= 2; y++) for (let x = giant.x; x < giant.x + 3; x++) tiles[y * w + x] = Tile.Wall;
+  const faceTiles = giantFace({ w }, giant);
+  const heart = { x: giant.x + 1 + rng.int(-3, 3), y: rng.int(6, Math.min(8, h - 4)) };
+  // Kitchen counters: short walls between his face and the stone, and a few more around the room.
+  for (let k = rng.int(2, 3); k > 0; k--) {
+    const len = rng.int(2, 4);
+    const cx = rng.int(Math.max(2, heart.x - 4), Math.min(w - 2 - len, heart.x + 2));
+    const cy = rng.int(4, heart.y - 1);
+    for (let x = cx; x < cx + len; x++) if (cheb({ x, y: cy }, heart) > 1) tiles[cy * w + x] = Tile.Wall;
+  }
+  for (let k = rng.int(2, 3); k > 0; k--) {
+    const px = rng.int(4, w - 4);
+    const py = rng.int(3, h - 3);
+    if (cheb({ x: px, y: py }, heart) <= 2 || cheb({ x: px, y: py }, entrance) <= 2 || cheb({ x: px, y: py }, stairs) <= 1) continue;
+    tiles[py * w + px] = Tile.Wall;
+  }
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (tiles[(heart.y + dy) * w + heart.x + dx] !== Tile.Floor) return null;
+  if (faceTiles.some((i) => tiles[i] !== Tile.Floor)) return null;
+  tiles[entrance.y * w + entrance.x] = Tile.Sunshaft;
+  tiles[heart.y * w + heart.x] = Tile.Heartstone;
+  tiles[stairs.y * w + stairs.x] = Tile.StairsDown;
+  const d = distanceMap(tiles, w, h, entrance);
+  for (let i = 0; i < tiles.length; i++) if (isWalkable(tiles[i]!) && d[i]! < 0) return null;
+  const blocks = (x: number, y: number) => x < 0 || y < 0 || x >= w || y >= h || blocksSight(tiles[y * w + x]!);
+  const lightsFace = (x: number, y: number, r: number) => {
+    let hit = false;
+    computeFov(x, y, r, blocks, (fx, fy) => {
+      if (faceTiles.includes(fy * w + fx)) hit = true;
+    });
+    return hit;
+  };
+  if (lightsFace(entrance.x, entrance.y, 3)) return null; // the start must be safe
+
+  const map: FloorMap = {
+    w,
+    h,
+    tiles,
+    rooms: [{ x: 1, y: 1, w: w - 2, h: h - 2 }],
+    entrance,
+    stairs,
+    sunshafts: [entrance],
+    hearts: [heart],
+    traps: [],
+    emitters: [],
+    mirrors: [],
+    torches: [],
+    locks: [],
+    glowcaps: [],
+    giant,
+  };
+  if (giantSafeSpots(map).length < 4) return null;
+
+  // A mirror puzzle that brings a sunbeam to the stone without crossing his face (or the head).
+  const used = new Set<number>([entrance.y * w + entrance.x, stairs.y * w + stairs.x]);
+  for (const i of faceTiles) used.add(i);
+  for (const i of faceTiles) used.add(i + w); // and the row in front, so he isn't flooded right after
+  if (rng.chance(0.85)) buildBeamPuzzle(rng, map, heart, used);
+  // Every beam, solved or scrambled, must stay off his face: no sunbeam may ever reach it.
+  const reach = beamReach(w, h, tiles, map.emitters, new Set(map.mirrors.map((m) => m.y * w + m.x)));
+  if (faceTiles.some((i) => reach.has(i))) return null;
+  if (map.emitters.length && !scrambleUntilUnsolved(rng, map)) return null;
+
+  // Torches, all safely out of sight of his face.
+  for (let tries = 0; tries < 80 && map.torches.length < 3; tries++) {
+    const p = { x: rng.int(2, w - 3), y: rng.int(2, h - 2) };
+    const i = p.y * w + p.x;
+    if (tiles[i] !== Tile.Floor || used.has(i) || cheb(p, heart) <= TORCH_RADIUS_FOR_GEN + 1 || cheb(p, entrance) < 3) continue;
+    if (map.torches.some((t) => cheb(t, p) < 4) || map.mirrors.some((m) => m.x === p.x && m.y === p.y)) continue;
+    if (lightsFace(p.x, p.y, TORCH_RADIUS_FOR_GEN)) continue;
+    map.torches.push({ ...p, lit: false });
+    used.add(i);
+  }
+  return map;
 }
 
 /**

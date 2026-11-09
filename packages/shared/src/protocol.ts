@@ -104,6 +104,8 @@ export type ServerMessage =
       glowcaps: number[];
       /** The Mothmother: [x, y, landed, face, restless], or null. */
       moth: number[] | null;
+      /** The Sleeping Giant: [x, y, stir 0–100, awake], or null. */
+      giant: number[] | null;
     }
   | {
       t: 'tick';
@@ -129,6 +131,7 @@ export type ServerMessage =
       locks: number[];
       glowcaps: number[];
       moth: number[] | null;
+      giant: number[] | null;
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

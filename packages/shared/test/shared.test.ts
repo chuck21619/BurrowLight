@@ -56,6 +56,11 @@ import {
   MOTH_LAND_TICKS,
   MOTH_BORED_TICKS,
   generateMothFloor,
+  generateGiantFloor,
+  giantSafeSpots,
+  giantFace,
+  GIANT_STIR_MAX,
+  GIANT_AWAKE_TICKS,
 } from '../src/index';
 
 describe('rng', () => {
@@ -559,7 +564,7 @@ describe('the Gloom', () => {
     }
   };
 
-  it('Gloom floors (3, and 9 for now) have one Great Heartstone, sunbeams, mirrors and a Gloom that starts free', () => {
+  it('the Gloom floor (3) has one Great Heartstone, sunbeams, mirrors and a Gloom that starts free', () => {
     for (let seed = 1; seed <= 40; seed++) {
       const game = bossGame(seed);
       expect(game.hearts.length).toBe(1);
@@ -627,7 +632,7 @@ describe('the Gloom', () => {
 
   it('mirrors can swing sunbeams across at least 40% of every Gloom room', () => {
     for (let seed = 1; seed <= 60; seed++) {
-      for (const floor of [3, 9]) {
+      for (const floor of [3]) {
         const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }], floor);
         const { map } = game;
         const reach = beamReach(map.w, map.h, map.tiles, map.emitters, new Set(game.mirrors.keys()));
@@ -1468,6 +1473,79 @@ describe('glowcaps and the Mothmother', () => {
     step(game);
     expect(game.exitOpen).toBe(true);
     expect(game.moth).toBeNull();
+  });
+});
+
+describe('the Sleeping Giant', () => {
+  const giantGame = (seed = 1) => {
+    const game = createGame(seed, [
+      { id: 'a', name: 'A', color: 1 },
+      { id: 'b', name: 'B', color: 2 },
+    ], 9);
+    for (const p of game.players.values()) {
+      p.x = game.map.entrance.x;
+      p.y = game.map.entrance.y;
+      p.lit = false;
+    }
+    return game;
+  };
+  const putAt = (game: ReturnType<typeof giantGame>, id: string, i: number) => {
+    const p = game.players.get(id)!;
+    p.x = i % game.map.w;
+    p.y = Math.floor(i / game.map.w);
+  };
+
+  it('floor 9 is his kitchen: a Great Heartstone, a safe start, safe lantern spots, and no sunbeam can ever reach his face', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const map = generateGiantFloor(seed, 9);
+      expect(map.giant).toBeDefined();
+      expect(giantSafeSpots(map).length).toBeGreaterThanOrEqual(4);
+      const game = giantGame(seed);
+      expect(game.giant).not.toBeNull();
+      expect(game.gloom).toBeNull();
+      expect(game.hearts[0]!.max).toBe(GREAT_HEART_FULL);
+      step(game);
+      for (const i of game.giant!.face) expect(game.light.level[i], `seed ${seed}`).toBe(0);
+      const reach = beamReach(map.w, map.h, map.tiles, map.emitters, new Set(map.mirrors.map((m) => m.y * map.w + m.x)));
+      for (const i of giantFace(map, map.giant!)) expect(reach.has(i)).toBe(false);
+    }
+  });
+
+  it('a lantern on his face stirs him; enough wakes him: lights out, Jitters, the stone loses a third', () => {
+    const game = giantGame(2);
+    const g = game.giant!;
+    const heart = game.hearts[0]!;
+    game.torches.forEach((_, k) => game.torches.set(k, true));
+    const a = game.players.get('a')!;
+    putAt(game, 'a', g.face[1]!);
+    a.oil = 99999;
+    a.lit = true;
+    let woke = false;
+    for (let t = 0; t < GIANT_STIR_MAX && !woke; t++) {
+      heart.charge = 120;
+      step(game);
+      woke = g.wakes > 0;
+    }
+    expect(woke).toBe(true);
+    expect(a.lit).toBe(false);
+    expect(a.jitters).toBeGreaterThan(0);
+    expect([...game.torches.values()].some(Boolean)).toBe(false);
+    expect(heart.charge).toBeLessThan(90);
+    // Grumbling, he doesn't stir; then he dozes off and settles in the dark.
+    a.lit = true;
+    for (let t = 0; t < GIANT_AWAKE_TICKS - 2; t++) step(game);
+    expect(g.stir).toBe(0);
+  });
+
+  it('a lantern at a safe spot charges the stone and he sleeps on', () => {
+    const game = giantGame(3);
+    const spot = giantSafeSpots(game.map)[0]!;
+    const a = game.players.get('a')!;
+    putAt(game, 'a', spot);
+    a.lit = true;
+    for (let t = 0; t < 50; t++) step(game);
+    expect(game.giant!.stir).toBe(0);
+    expect(game.hearts[0]!.charge).toBeGreaterThan(40);
   });
 });
 
