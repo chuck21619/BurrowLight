@@ -1634,6 +1634,15 @@ export class GameView {
   onTipSeen: (id: string) => void = () => {};
   private lastTipId: string | null = null;
 
+  /** The player tapped the tip away: never show that one again. */
+  dismissTip(): void {
+    if (!this.lastTipId) return;
+    this.tipsSeen.add(this.lastTipId);
+    this.onTipSeen(this.lastTipId);
+    this.lastTipId = null;
+    this.onTip(null);
+  }
+
   private updateTip(): void {
     const unfinished = this.hearts.some((h) => h.charge < h.max);
     const me = this.avatars.get(this.you);

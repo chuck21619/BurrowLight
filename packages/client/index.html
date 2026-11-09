@@ -2,8 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Burrowlight</title>
+    <!-- Added to a phone's home screen, it opens full screen with no address bar. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1d1a2b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Burrowlight" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -59,7 +68,7 @@
         <div id="timer"></div>
         <div id="debug"></div>
         <div id="toast" hidden></div>
-        <div id="tip" hidden></div>
+        <div id="tip" hidden title="Tap to dismiss"><span id="tip-text"></span><span class="tip-close" aria-label="Dismiss">×</span></div>
         <div id="point-hint" hidden></div>
       </div>
     </main>

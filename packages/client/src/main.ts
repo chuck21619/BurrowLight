@@ -372,8 +372,10 @@ game.onPartyChange = (players) => {
 game.onTip = (tip) => {
   const el = $('tip');
   el.hidden = !tip;
-  el.textContent = tip ?? '';
+  $('tip-text').textContent = tip ?? '';
 };
+// Tap (or click) a tip to dismiss it for good.
+$('tip').addEventListener('click', () => game.dismissTip());
 
 let runEnded = false;
 function renderBoard(entries: LeaderboardEntry[], rank: number | null, ranked: boolean) {

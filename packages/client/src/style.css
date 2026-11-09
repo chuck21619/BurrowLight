@@ -848,3 +848,31 @@ body.touch #help {
     top: 138px;
   }
 }
+
+#tip {
+  pointer-events: auto;
+  cursor: pointer;
+  padding-right: 30px;
+}
+
+#tip .tip-close {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  font-size: 18px;
+  color: var(--muted);
+}
+
+@media (max-width: 700px), (max-height: 500px) {
+  #tip {
+    font-size: 12px;
+    padding: 5px 26px 5px 10px;
+    max-width: min(320px, calc(100% - 32px));
+  }
+}
+
+/* Home-screen app on phones with a notch: keep the top of the HUD clear of it. */
+#banner {
+  top: 12px;
+  top: max(12px, env(safe-area-inset-top));
+}

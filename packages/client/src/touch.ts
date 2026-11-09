@@ -100,6 +100,22 @@ export function mountTouchControls(host: HTMLElement): TouchControls {
   const top = document.createElement('div');
   top.className = 'touch-top';
   top.append(button('Talents', 'KeyT', 'small'), button('Sound', 'KeyM', 'small'));
+  // Full screen hides the browser's address bar (Android browsers; iPhones need Add to Home Screen).
+  const root2 = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => void };
+  const canFull = Boolean(document.fullscreenEnabled || root2.webkitRequestFullscreen);
+  const standalone = window.matchMedia?.('(display-mode: fullscreen), (display-mode: standalone)').matches;
+  if (canFull && !standalone) {
+    const full = document.createElement('button');
+    full.type = 'button';
+    full.className = 'touch-btn small';
+    full.textContent = 'Full screen';
+    full.addEventListener('click', () => {
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else if (root2.requestFullscreen) void root2.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      else root2.webkitRequestFullscreen?.();
+    });
+    top.append(full);
+  }
 
   root.append(pad, actions, top);
   host.append(root);
