@@ -36,6 +36,7 @@ import {
   type ServerMessage,
 } from '@burrowlight/shared';
 import { SRC, makeTextures, type Textures } from './textures';
+import { sfx } from './sound';
 
 const SCALE = 3;
 const TILE = SRC * SCALE; // 48 px on screen
@@ -185,6 +186,10 @@ export class GameView {
   private confirmRequested = false;
   /** Little floating messages above critters ("Can't dig here"). */
   private floaters: { text: Text; born: number; owner: Avatar }[] = [];
+  /** Speech bubbles over critters ("Ow!", "AAAH!"): at most one per critter. */
+  private bubbles = new Map<Avatar, { root: Container; born: number; life: number }>();
+  /** When each panicking critter last screamed. */
+  private lastScream = new Map<Avatar, number>();
   private burrowRequested = false;
   private torchSprites = new Map<number, Sprite>();
   /** Pen doors and what opens them, from the server. */
@@ -193,7 +198,6 @@ export class GameView {
   private glowcaps = new Map<number, number>();
   private glowcapSprites = new Map<number, Sprite>();
   private everLitGlowcap = false;
-  private giantTipDone = false;
   /** The Mothmother: server state plus a smoothed drawing position. */
   private moth: { x: number; y: number; landed: boolean; face: number; restless: number; sx: number; sy: number } | null = null;
   private mothView: { root: Container; wings: Graphics[] } | null = null;
@@ -235,6 +239,8 @@ export class GameView {
   onPartyTalents: (party: Map<string, { talents: Set<TalentId>; points: number; mirror: boolean; gear: Loadout; vest: 0 | 1 }>, you: string) => void = () => {};
   /** Achievement events for you, from the server (your browser counts them toward gear). */
   onFeats: (feats: string[]) => void = () => {};
+  /** M: sound on/off. */
+  onMuteToggle: () => void = () => {};
   /** One buffered key tap, so quick taps (or a tap while busy) are never lost. */
   private tapped: Dir | null = null;
 
@@ -248,7 +254,6 @@ export class GameView {
   private gateSeen = false;
   /** Has this player used Q on a tunnel yet (for the floor-2 tip)? */
   private usedTunnelKey = false;
-  private lastTip: string | null | undefined = undefined;
   onDebug: (text: string) => void = () => {};
 
   constructor(private send: (msg: ClientMessage) => void) {}
@@ -362,6 +367,7 @@ export class GameView {
     this.setParty(msg.party);
     msg.heartCharge.forEach((c, k) => {
       const heart = this.hearts[k];
+      if (heart && heart.charge < heart.max && c >= heart.max) sfx.heart();
       if (heart && heart.charge !== c) {
         heart.charge = c;
         this.drawHeartBar(heart);
@@ -415,6 +421,7 @@ export class GameView {
     const [x, y, stir, awake] = packed as [number, number, number, number];
     const prev = this.giant;
     this.giant = { x, y, stir, awake: awake === 1 };
+    if (prev && !prev.awake && awake === 1) sfx.giantWake();
     if (!this.giantView) this.giantView = this.makeGiantView(x, y);
     if (!prev || prev.awake !== this.giant.awake || Math.floor(prev.stir / 34) !== Math.floor(stir / 34)) this.drawGiantFace();
     const bar = this.giantView.bar;
@@ -640,6 +647,7 @@ export class GameView {
         return s;
       });
       this.tunnels.set(key, { a, b, sprites });
+      if (this.serverTick > 0) sfx.dig();
     }
     for (const [key, t] of this.tunnels) {
       if (seen.has(key)) continue;
@@ -683,6 +691,7 @@ export class GameView {
         this.markerLayer.addChild(s);
       }
       if (this.mirrors.get(i) !== o) {
+        if (this.mirrors.has(i) && this.tiles[i] !== UNKNOWN) sfx.mirror();
         this.mirrors.set(i, o);
         s.texture = this.tex.mirror[o];
         this.lightDirty = true;
@@ -734,6 +743,7 @@ export class GameView {
       l.charge = charge;
       const isOpen = open === 1;
       if (isOpen) this.doorOpenedOnce ||= this.tiles[door] !== UNKNOWN;
+      if (isOpen && !l.open && l.charge >= 0 && this.tiles[door] !== UNKNOWN) sfx.door();
       if (this.tiles[door] !== UNKNOWN && this.tiles[door] !== (isOpen ? Tile.DoorOpen : Tile.Door)) {
         this.tiles[door] = isOpen ? Tile.DoorOpen : Tile.Door;
         const s = this.tileSprites[door];
@@ -826,6 +836,10 @@ export class GameView {
   private setOpen(open: boolean): void {
     if (open === this.open) return;
     this.open = open;
+    if (open && this.serverTick > 0) {
+      sfx.hatch();
+      for (const a of this.avatars.values()) this.bubble(a, 'Yay!');
+    }
     const s = this.tileSprites[this.stairsIdx];
     if (s) s.texture = open ? this.tex.stairs : this.tex.stairsClosed;
   }
@@ -848,6 +862,22 @@ export class GameView {
       seen.add(id);
       a.connected = conn === 1;
       a.root.alpha = a.connected ? 1 : 0.5;
+      // Speech bubbles for what just happened.
+      if (!snap) {
+        const heard = a.info.id === this.you || (a.root.visible && Math.hypot(a.tx - (this.avatars.get(this.you)?.tx ?? 0), a.ty - (this.avatars.get(this.you)?.ty ?? 0)) < 8);
+        if (heard && ko > 0 && a.ko === 0) sfx.trap();
+        if (heard && panic === 1 && !a.panic) sfx.panic();
+        if (heard && jitters - a.jitters >= 15) sfx.snuff();
+        if (ko > 0 && a.ko === 0) this.bubble(a, 'Ow!');
+        else if (panic === 1 && !a.panic) this.bubble(a, 'AAAH!');
+        else if (panic === 0 && a.panic) this.bubble(a, 'Phew.');
+        else if (jitters - a.jitters >= 15) this.bubble(a, 'Eep!');
+        else if (oil <= 0 && a.oil > 0) this.bubble(a, 'Uh oh...');
+        else if (panic === 1 && performance.now() - (this.lastScream.get(a) ?? 0) > 1800) {
+          this.bubble(a, ['AAAH!', 'Too dark!', 'Eek!', 'Mama!'][Math.floor(Math.random() * 4)]!);
+          this.lastScream.set(a, performance.now());
+        }
+      }
       a.lit = lit === 1;
       a.oil = oil;
       a.ko = ko;
@@ -929,6 +959,10 @@ export class GameView {
       if (!e.repeat) this.mirrorRequested = true;
       return;
     }
+    if (e.code === 'KeyM') {
+      if (!e.repeat) this.onMuteToggle();
+      return;
+    }
     if (e.code === 'KeyQ') {
       if (!e.repeat) this.burrowRequested = true;
       return;
@@ -982,6 +1016,24 @@ export class GameView {
   }
 
   /** A short message that floats up from a critter and fades. */
+  /** A little white speech bubble above a critter. */
+  private bubble(a: Avatar, message: string, life = 1500): void {
+    this.bubbles.get(a)?.root.destroy({ children: true });
+    const root = new Container();
+    const text = new Text({ text: message, style: { fontFamily: 'Trebuchet MS, sans-serif', fontSize: 13, fill: 0x2a2030, fontWeight: 'bold' } });
+    text.anchor.set(0.5);
+    const w = text.width + 14;
+    const h = text.height + 6;
+    const g = new Graphics();
+    g.roundRect(-w / 2, -h / 2, w, h, 8).fill(0xfff8ec).stroke({ color: 0x2a2030, width: 1.5 });
+    g.moveTo(-4, h / 2 - 1).lineTo(0, h / 2 + 6).lineTo(4, h / 2 - 1).closePath().fill(0xfff8ec);
+    root.addChild(g, text);
+    root.zIndex = 9998;
+    this.entityLayer.addChild(root);
+    this.bubbles.set(a, { root, born: performance.now(), life });
+    if (message.startsWith('AAAH') || message === 'Eek!' || message === 'Too dark!' || message === 'Mama!') this.lastScream.set(a, performance.now());
+  }
+
   private say(a: Avatar, message: string): void {
     const text = new Text({
       text: message,
@@ -1002,6 +1054,8 @@ export class GameView {
       return;
     }
     this.myLit = on;
+    if (on) sfx.lanternOn();
+    else sfx.lanternOff();
     this.litToggledAt = performance.now();
     this.send({ t: 'lantern', on });
     this.lightDirty = true;
@@ -1365,6 +1419,21 @@ export class GameView {
       if (mine) this.digPrompt.text.position.set(mine.root.x, mine.root.y - TILE * 0.85);
     }
 
+    // Speech bubbles pop up, wobble a little, and pop away; hidden when their critter can't be seen.
+    for (const [a, b] of this.bubbles) {
+      const age = (now - b.born) / b.life;
+      if (age >= 1 || a.root.destroyed) {
+        b.root.destroy({ children: true });
+        this.bubbles.delete(a);
+        continue;
+      }
+      const pop = Math.min(1, age * 8);
+      b.root.scale.set(pop * (1 + 0.04 * Math.sin(now / 90)));
+      b.root.position.set(a.root.x, a.root.y - TILE * 1.05 - (a.ko > 0 ? 10 : 0));
+      b.root.visible = a.root.visible;
+      b.root.alpha = age > 0.8 ? (1 - age) * 5 : 1;
+    }
+
     // Floating messages rise and fade over 1.4 s.
     this.floaters = this.floaters.filter((f) => {
       const age = (now - f.born) / 1400;
@@ -1506,36 +1575,46 @@ export class GameView {
   }
 
   /** Hints for the first floors: how light works on floor 1, how burrowing works on floor 2. */
+  /** Tips this player has already had (remembered by the browser), and whether tips are on at all. */
+  tipsSeen = new Set<string>();
+  tipsOn = true;
+  /** A tip went away because its job was done: don't show it again. */
+  onTipSeen: (id: string) => void = () => {};
+  private lastTipId: string | null = null;
+
   private updateTip(): void {
-    let tip: string | null = null;
     const unfinished = this.hearts.some((h) => h.charge < h.max);
-    if (this.floor === 1) {
-      if (this.open) tip = 'The hatch is open! Everyone stand on the ladder to go down.';
-      else if (!this.everLit) tip = "It's dark down here. Press Space to light your lantern. It burns oil, so use it wisely.";
-      else tip = 'Find the Heartstone (look for its glow) and stand near it with your lantern lit. More light charges it faster.';
-    } else if (this.floor === 2 && unfinished) {
-      if (this.gateSeen && this.tunnels.size === 0) tip = 'That Heartstone is fenced in. Walk into the gate and hold to dig under it.';
-      else if (this.tunnels.size > 0 && !this.usedTunnelKey)
-        tip = 'You came out the other side! To go back through, stand on a tunnel hole and press Q.';
-    } else if (this.giant && unfinished && !this.giantTipDone) {
-      tip = 'Shh! Light on the Giant\'s face stirs him. Light the Great Heartstone from the shadows: behind counters, or with a sunbeam.';
-      if (this.giant.stir > 0 || this.hearts.some((h) => h.charge > h.max / 3)) this.giantTipDone = true;
-    } else if (this.floor >= 4 && !this.everLitGlowcap && [...this.glowcapSprites.keys()].some((i) => this.tiles[i] !== UNKNOWN)) {
-      tip = this.moth
-        ? 'The Mothmother loves light! Light glowcaps away from the Great Heartstone to lure her off it.'
-        : 'Glowcaps! Walk over one with your lantern lit and it glows for a while, free.';
-    } else if (unfinished && !this.doorOpenedOnce) {
-      // First locked pens (act 2): one short hint per kind, until a door has been opened once.
-      const seen = this.locks.filter((l) => !l.open && this.tiles[l.door] !== UNKNOWN);
-      if (seen.some((l) => l.plate >= 0 && this.tiles[l.plate] !== UNKNOWN))
-        tip = 'A locked pen! Someone stand on the pressure plate to hold its door open (or dig under the wall).';
-      else if (seen.some((l) => l.gem >= 0 && this.tiles[l.gem] !== UNKNOWN))
-        tip = 'A locked pen! Turn the mirrors to shine a sunbeam into the sun gem, and the door opens for good.';
+    const me = this.avatars.get(this.you);
+    const seenTile = (i: number) => this.tiles[i] !== UNKNOWN;
+    const pens = this.locks.filter((l) => !l.open && seenTile(l.door));
+    // In order of importance; the first that applies (and hasn't been seen before) shows.
+    const tips: [id: string, active: boolean, text: string][] = [
+      ['hatch', this.floor === 1 && this.open, 'The hatch is open! Everyone stand on the ladder to go down.'],
+      ['lantern', !this.everLit, "It's dark down here. Press Space to light your lantern. It burns oil, so use it wisely."],
+      ['heartstone', this.floor === 1 && unfinished, 'Find the Heartstone (look for its glow) and stand near it with your lantern lit. More light charges it faster.'],
+      ['jitters', !!me && me.jitters > 50 && !me.panic, "You're getting the Jitters in the dark! Stand in any light, or right next to a friend."],
+      ['trap', !!me && me.ko > 0, 'Snap! A hidden trap. Traps show up once light falls on them.'],
+      ['dig', unfinished && this.gateSeen && this.tunnels.size === 0, 'That Heartstone is fenced in. Walk into the gate and hold to dig under it.'],
+      ['tunnel', this.tunnels.size > 0 && !this.usedTunnelKey, 'You came out the other side! To go back through, stand on a tunnel hole and press Q.'],
+      ['mirror', unfinished && [...this.mirrorSprites.keys()].some(seenTile) && this.emitters.some((e) => seenTile(e.y * this.w + e.x)), 'A sunbeam! Stand on a mirror and press E to turn it. Sunlight charges Heartstones too.'],
+      ['torch', [...this.torches.keys()].some(seenTile) && ![...this.torches.values()].some(Boolean) && !this.gloom, 'A torch. Walk over it with your lantern lit and it gives free light.'],
+      ['gloom', !!this.gloom && unfinished && this.intro === 0, "The Gloom eats light and steals the Great Heartstone's. Lure it with a lantern into a sunbeam's path, then turn a mirror onto it!"],
+      ['giant', !!this.giant && unfinished && (this.giant.stir === 0 && this.hearts.every((h) => h.charge < h.max / 3)), "Shh! Light on the Giant's face stirs him. Light the Great Heartstone from the shadows: behind counters, or with a sunbeam."],
+      ['moth', !!this.moth && !this.everLitGlowcap, 'The Mothmother loves light! Light glowcaps away from the Great Heartstone to lure her off it.'],
+      ['glowcap', this.floor >= 4 && !this.everLitGlowcap && [...this.glowcapSprites.keys()].some(seenTile), 'Glowcaps! Walk over one with your lantern lit and it glows for a while, free.'],
+      ['plate', unfinished && !this.doorOpenedOnce && pens.some((l) => l.plate >= 0 && seenTile(l.plate)), 'A locked pen! Someone stand on the pressure plate to hold its door open (or dig under the wall).'],
+      ['gem', unfinished && !this.doorOpenedOnce && pens.some((l) => l.gem >= 0 && seenTile(l.gem)), 'A locked pen! Turn the mirrors to shine a sunbeam into the sun gem, and the door opens for good.'],
+    ];
+    const pick = this.tipsOn ? tips.find(([id, active]) => active && !this.tipsSeen.has(id)) : undefined;
+    const id = pick?.[0] ?? null;
+    if (id === this.lastTipId) return;
+    // The tip that was showing has done its job (or the floor changed): never show it again.
+    if (this.lastTipId && !tips.find(([t]) => t === this.lastTipId)?.[1]) {
+      this.tipsSeen.add(this.lastTipId);
+      this.onTipSeen(this.lastTipId);
     }
-    if (tip !== this.lastTip) {
-      this.lastTip = tip;
-      this.onTip(tip);
-    }
+    this.lastTipId = id;
+    this.onTip(pick?.[2] ?? null);
   }
 
   private mothOnStone(): boolean {

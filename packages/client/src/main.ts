@@ -15,7 +15,8 @@ import {
 } from '@burrowlight/shared';
 import { GEAR, gearDef, type GearSlot, type Loadout } from '@burrowlight/shared';
 import { GameView } from './game';
-import { progress, recordFeats, setWearing, unlocked, wearing } from './save';
+import { setSoundMuted, sfx } from './sound';
+import { markTipSeen, muted, progress, recordFeats, setMuted, setTipsOn, setWearing, tipsOn, tipsSeen, unlocked, wearing } from './save';
 import { Net } from './net';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -219,8 +220,27 @@ function toast(text: string) {
   toastTimer = setTimeout(() => (el.hidden = true), 6000);
 }
 
+game.tipsSeen = new Set(tipsSeen());
+game.tipsOn = tipsOn();
+game.onTipSeen = (id) => markTipSeen(id);
+const tipsBox = $<HTMLInputElement>('tips-on');
+tipsBox.checked = tipsOn();
+tipsBox.addEventListener('change', () => {
+  setTipsOn(tipsBox.checked);
+  game.tipsOn = tipsBox.checked;
+  game.tipsSeen = new Set(tipsSeen());
+});
+setSoundMuted(muted());
+game.onMuteToggle = () => {
+  const m = !muted();
+  setMuted(m);
+  setSoundMuted(m);
+  toast(m ? 'Sound off (M to turn it back on)' : 'Sound on');
+};
+
 game.onFeats = (feats) => {
   const fresh = recordFeats(feats);
+  if (fresh.length) sfx.unlock();
   if (fresh.length) toast(`New gear unlocked: ${fresh.map((g) => g.name).join(', ')}! Wear it from the lobby next run.`);
 };
 

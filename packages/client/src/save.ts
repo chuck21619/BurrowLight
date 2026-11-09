@@ -5,6 +5,10 @@ interface Save {
   counts: Partial<Record<Feat, number>>;
   unlocked: GearId[];
   wearing: Loadout;
+  /** Tips this player has already had. */
+  tipsSeen: string[];
+  tipsOn: boolean;
+  muted: boolean;
 }
 
 const KEY = 'burrowlight.save.v1';
@@ -16,9 +20,12 @@ function load(): Save {
       counts: typeof raw.counts === 'object' && raw.counts ? raw.counts : {},
       unlocked: Array.isArray(raw.unlocked) ? raw.unlocked.filter((id) => GEAR.some((g) => g.id === id)) : [],
       wearing: cleanLoadout(raw.wearing),
+      tipsSeen: Array.isArray(raw.tipsSeen) ? raw.tipsSeen.filter((t) => typeof t === 'string') : [],
+      tipsOn: raw.tipsOn !== false,
+      muted: raw.muted === true,
     };
   } catch {
-    return { counts: {}, unlocked: [], wearing: {} };
+    return { counts: {}, unlocked: [], wearing: {}, tipsSeen: [], tipsOn: true, muted: false };
   }
 }
 
@@ -54,4 +61,27 @@ export function recordFeats(feats: string[]): GearDef[] {
   save.unlocked.push(...fresh.map((g) => g.id));
   persist();
   return fresh;
+}
+
+export const tipsSeen = (): string[] => save.tipsSeen;
+export const tipsOn = (): boolean => save.tipsOn;
+export const muted = (): boolean => save.muted;
+
+export function markTipSeen(id: string): void {
+  save = load();
+  if (!save.tipsSeen.includes(id)) save.tipsSeen.push(id);
+  persist();
+}
+
+export function setTipsOn(on: boolean): void {
+  save = load();
+  save.tipsOn = on;
+  if (on) save.tipsSeen = []; // turning tips back on shows them all again
+  persist();
+}
+
+export function setMuted(m: boolean): void {
+  save = load();
+  save.muted = m;
+  persist();
 }
