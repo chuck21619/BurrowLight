@@ -25,6 +25,7 @@ import {
   START_OIL,
   SUNSHAFT_RADIUS,
   BEAM_STRENGTH,
+  ROOT_BRACES_PER_FLOOR,
   gloomDrain,
   GLOOM_BRIGHTNESS_WEIGHT,
   GLOOM_STEP,
@@ -87,12 +88,16 @@ export interface PlayerState {
   gloomTouchAt: number;
   /** A tunnel being dug: it opens at `until` between tile indices `a` and `b`. */
   digging: { until: number; a: number; b: number } | null;
+  /** Root braces left on this floor: each one shores up one tunnel. */
+  braces: number;
 }
 
-/** A critter's tunnel under soft soil, between two floor tiles. Only its owner can use it. */
+/** A tunnel under soft soil, between two floor tiles. Permanent, and anyone can use it. */
 export interface Tunnel {
   a: number;
   b: number;
+  /** Who dug it (for its color). */
+  owner: string;
 }
 
 /** The act 1 boss: a 2×2 cloud of darkness. (x, y) is its top-left tile. */
@@ -158,8 +163,8 @@ export interface GameState {
   introUntil: number;
   /** The torch the Gloom eats in its intro. */
   introTorch: number;
-  /** Each critter's one tunnel, by critter id. */
-  tunnels: Map<string, Tunnel>;
+  /** Every tunnel dug on this floor. */
+  tunnels: Tunnel[];
 }
 
 export interface NewPlayer {
@@ -194,6 +199,7 @@ export function createGame(seed: number, players: NewPlayer[], startFloor = 1): 
       panicDir: null,
       gloomTouchAt: -Infinity,
       digging: null,
+      braces: ROOT_BRACES_PER_FLOOR,
     });
   });
   enterFloor(state, startFloor);
@@ -231,8 +237,11 @@ function enterFloor(state: GameState, n: number): void {
   state.exitOpen = false;
   state.mirrors = new Map(map.mirrors.map((m) => [m.y * map.w + m.x, m.orient]));
   state.torches = new Map(map.torches.map((t) => [t.y * map.w + t.x, t.lit]));
-  state.tunnels = new Map();
-  for (const p of state.players.values()) p.digging = null;
+  state.tunnels = [];
+  for (const p of state.players.values()) {
+    p.digging = null;
+    p.braces = ROOT_BRACES_PER_FLOOR;
+  }
   state.introTorch = map.introTorch ? map.introTorch.y * map.w + map.introTorch.x : -1;
   state.introUntil = map.introTorch ? state.tick + BOSS_INTRO_MAX : 0;
   const order = [...state.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
@@ -288,9 +297,10 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   const tile = mapTile(state.map);
 
   for (const p of order) {
-    // A finished dig opens the tunnel (and closes this critter's old one: one tunnel each).
+    // A finished dig uses up a root brace and opens a permanent tunnel.
     if (p.digging && state.tick >= p.digging.until) {
-      state.tunnels.set(p.id, { a: p.digging.a, b: p.digging.b });
+      state.tunnels.push({ a: p.digging.a, b: p.digging.b, owner: p.id });
+      p.braces = Math.max(0, p.braces - 1);
       p.digging = null;
     }
     if (p.panic && state.tick >= p.readyAt) {
@@ -311,7 +321,7 @@ export function step(state: GameState, opts: StepOptions = {}): void {
         cost = ActionCost.blockedMove;
       }
     } else if (action.kind === 'dig') {
-      const plan = planTunnel(state, p.x, p.y, action.dir);
+      const plan = p.braces > 0 ? planTunnel(state, p.x, p.y, action.dir) : null;
       if (plan) {
         p.digging = { until: state.tick + actionCost(action, p.speed), ...plan };
         cost = actionCost(action, p.speed);
@@ -319,10 +329,10 @@ export function step(state: GameState, opts: StepOptions = {}): void {
         cost = ActionCost.blockedMove;
       }
     } else if (action.kind === 'burrow') {
-      // Pop out of the other end of your own tunnel.
-      const t = state.tunnels.get(p.id);
+      // Pop out of the other end of whichever tunnel you're standing on (anyone's).
       const here = p.y * state.map.w + p.x;
-      const to = t ? (here === t.a ? t.b : here === t.b ? t.a : -1) : -1;
+      const t = state.tunnels.find((tn) => tn.a === here || tn.b === here);
+      const to = t ? (here === t.a ? t.b : t.a) : -1;
       if (to >= 0) {
         p.x = to % state.map.w;
         p.y = Math.floor(to / state.map.w);
@@ -714,12 +724,16 @@ export function planTunnel(state: GameState, x: number, y: number, dir: 'n' | 's
   const ox = x + dx * n;
   const oy = y + dy * n;
   if (!isWalkable(tileAt(map, ox, oy))) return null;
-  return { a: y * map.w + x, b: oy * map.w + ox };
+  const a = y * map.w + x;
+  const b = oy * map.w + ox;
+  // One tunnel per spot: don't dig where a tunnel already starts or ends.
+  if (state.tunnels.some((t) => t.a === a || t.b === a || t.a === b || t.b === b)) return null;
+  return { a, b };
 }
 
 /** Tunnels as [endA, endB, ownerId] triples. */
 export function packTunnels(state: GameState): [number, number, string][] {
-  return [...state.tunnels].map(([id, t]) => [t.a, t.b, id]);
+  return state.tunnels.map((t) => [t.a, t.b, t.owner]);
 }
 
 /** True during a boss introduction (nobody can act). */

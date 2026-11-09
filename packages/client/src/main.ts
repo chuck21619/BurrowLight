@@ -162,7 +162,7 @@ function lobbyRow(p: LobbyPlayer, host: boolean, you: boolean) {
 
 game.onPartyChange = (players) => {
   $('party').replaceChildren(
-    ...players.map(({ info, connected, you, lit, oil, ko, jitters, panic }) => {
+    ...players.map(({ info, connected, you, lit, oil, ko, jitters, panic, braces }) => {
       const li = document.createElement('li');
       if (!connected) li.className = 'away';
       const dot = document.createElement('span');
@@ -181,6 +181,10 @@ game.onPartyChange = (players) => {
               ? ' · lantern lit'
               : '';
       name.textContent = `${info.name}${you ? ' (you)' : ''}${state}`;
+      const brace = document.createElement('span');
+      brace.className = 'braces';
+      brace.title = 'Root braces: each one digs a tunnel on this floor';
+      brace.textContent = `braces ${braces}`;
       const bar = document.createElement('div');
       bar.className = 'oil';
       const fill = document.createElement('div');
@@ -195,7 +199,10 @@ game.onPartyChange = (players) => {
       jitFill.className = panic ? 'jitters-fill panic' : 'jitters-fill';
       jitFill.style.width = `${jitters}%`;
       jit.append(jitFill);
-      text.append(name, bar, jit);
+      const top = document.createElement('div');
+      top.className = 'member-top';
+      top.append(name, brace);
+      text.append(top, bar, jit);
       li.append(dot, text);
       return li;
     }),

@@ -17,6 +17,7 @@ import {
   MAX_OIL,
   planTunnel,
   DIG_TICKS,
+  ROOT_BRACES_PER_FLOOR,
   inIntro,
   gloomFootprint,
   GREAT_HEART_FULL,
@@ -877,37 +878,64 @@ describe('burrowing', () => {
     expect(beamCellOf(Tile.Soil)).toBe('wall');
   });
 
-  it('digging takes 3 seconds standing still, then the tunnel takes its owner to the other side', () => {
+  it('digging takes 3 seconds standing still, uses a root brace, and the tunnel goes both ways', () => {
     const { game, a, dir, plan } = withSoil();
+    expect(a.braces).toBe(ROOT_BRACES_PER_FLOOR);
     queueIntent(game, 'a', 1, { kind: 'dig', dir });
     step(game);
     expect(a.digging).not.toBeNull();
     queueIntent(game, 'a', 2, { kind: 'wait' });
     for (let i = 0; i < DIG_TICKS - 2; i++) step(game);
-    expect(game.tunnels.has('a')).toBe(false); // still digging; can't act
+    expect(game.tunnels.length).toBe(0); // still digging; can't act
     for (let i = 0; i < 3; i++) step(game);
-    expect(game.tunnels.get('a')).toEqual({ a: plan.a, b: plan.b });
+    expect(game.tunnels).toEqual([{ a: plan.a, b: plan.b, owner: 'a' }]);
+    expect(a.braces).toBe(ROOT_BRACES_PER_FLOOR - 1);
     for (let i = 0; i < 3; i++) step(game);
     queueIntent(game, 'a', 3, { kind: 'burrow' });
     step(game);
     expect(a.y * game.map.w + a.x).toBe(plan.b);
+    for (let i = 0; i < 3; i++) step(game);
+    queueIntent(game, 'a', 4, { kind: 'burrow' });
+    step(game);
+    expect(a.y * game.map.w + a.x).toBe(plan.a);
   });
 
-  it("one tunnel per critter: a new one replaces the old; and only the owner can use theirs", () => {
+  it('anyone can use any tunnel, and tunnels are permanent', () => {
     const { game, a, plan } = withSoil();
-    game.tunnels.set('a', { a: plan.a, b: plan.b });
+    game.tunnels.push({ a: plan.a, b: plan.b, owner: 'a' });
     const b = game.players.get('b')!;
     b.x = a.x;
     b.y = a.y;
     queueIntent(game, 'b', 1, { kind: 'burrow' });
     step(game);
-    expect(b.y * game.map.w + b.x).toBe(plan.a); // B can't use A's tunnel
-    // A digs again somewhere: the old tunnel is replaced, not added.
-    a.digging = { until: game.tick + 1, a: plan.b, b: plan.a };
+    expect(b.y * game.map.w + b.x).toBe(plan.b); // B uses A's tunnel
+    for (let i = 0; i < 50; i++) step(game);
+    expect(game.tunnels.length).toBe(1); // still there
+  });
+
+  it('out of root braces, you cannot dig; a new floor brings a fresh brace', () => {
+    const { game, a, dir } = withSoil();
+    a.braces = 0;
+    queueIntent(game, 'a', 1, { kind: 'dig', dir });
     step(game);
+    expect(a.digging).toBeNull();
+    expect(planTunnel(game, a.x, a.y, dir)).not.toBeNull(); // the spot itself is fine
+    // Going down a floor refills braces.
+    game.exitOpen = true;
+    for (const p of game.players.values()) {
+      p.x = game.map.stairs.x;
+      p.y = game.map.stairs.y;
+    }
     step(game);
-    expect(game.tunnels.size).toBe(1);
-    expect(game.tunnels.get('a')).toEqual({ a: plan.b, b: plan.a });
+    expect(game.descended).toBe(true);
+    expect(a.braces).toBe(ROOT_BRACES_PER_FLOOR);
+    expect(game.tunnels.length).toBe(0);
+  });
+
+  it('no second tunnel from the same spot', () => {
+    const { game, a, dir, plan } = withSoil();
+    game.tunnels.push({ a: plan.a, b: plan.b, owner: 'b' });
+    expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
   });
 
   it("can't dig where there's no soil", () => {

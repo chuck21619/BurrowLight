@@ -234,6 +234,17 @@ button.primary {
   opacity: 0.55;
 }
 
+#party .member-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#party .braces {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 #party .member {
   display: flex;
   flex-direction: column;

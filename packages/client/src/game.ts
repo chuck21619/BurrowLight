@@ -6,6 +6,7 @@ import {
   gloomFootprint,
   LANTERN_RADIUS,
   MAX_QUEUED_INTENTS,
+  MAX_TUNNEL_SOIL,
   SUNSHAFT_RADIUS,
   TORCH_RADIUS,
   Tile,
@@ -29,6 +30,7 @@ import {
   type ServerMessage,
 } from '@burrowlight/shared';
 import { SRC, makeTextures, type Textures } from './textures';
+import { isWalkable as isWalkableTile } from '@burrowlight/shared';
 
 const SCALE = 3;
 const TILE = SRC * SCALE; // 48 px on screen
@@ -64,6 +66,8 @@ interface Avatar {
   /** Ticks left digging (0 = not digging). */
   dig: number;
   digBar: Graphics;
+  /** Root braces left on this floor. */
+  braces: number;
   /** 0–100 */
   jitters: number;
   panic: boolean;
@@ -86,6 +90,7 @@ export interface PartyMember {
   ko: number;
   jitters: number;
   panic: boolean;
+  braces: number;
 }
 
 export interface Objective {
@@ -149,10 +154,16 @@ export class GameView {
   private beamGfx = new Graphics();
   private gloom: Gloom | null = null;
   private torches = new Map<number, boolean>();
-  /** Tunnel holes, by owner id: [endA, endB] and the two hole sprites. */
+  /** Tunnel holes, keyed "a:b": the two hole sprites. */
   private tunnels = new Map<string, { a: number; b: number; sprites: Sprite[] }>();
   /** When you started pushing into soft soil (to dig after a short hold). */
   private pushSoilSince = 0;
+  /** Set once a push has been answered (dig sent or "can't dig"), until you let go. */
+  private pushHandled = false;
+  /** A dig request waiting for the server's answer. */
+  private digSeq = 0;
+  /** Little floating messages above critters ("Can't dig here"). */
+  private floaters: { text: Text; born: number; owner: Avatar }[] = [];
   private burrowRequested = false;
   private torchSprites = new Map<number, Sprite>();
   /** Ticks left in a boss intro (input is ignored and the camera watches the Gloom). */
@@ -358,14 +369,13 @@ export class GameView {
     }
   }
 
-  /** Tunnel openings: a hole at each end, ringed in its owner's color. */
+  /** Tunnel openings: a hole at each end, ringed in the color of whoever dug it. */
   private setTunnels(list: [number, number, string][]): void {
     const seen = new Set<string>();
     for (const [a, b, owner] of list) {
-      seen.add(owner);
-      const cur = this.tunnels.get(owner);
-      if (cur && cur.a === a && cur.b === b) continue;
-      cur?.sprites.forEach((s) => s.destroy());
+      const key = `${a}:${b}`;
+      seen.add(key);
+      if (this.tunnels.has(key)) continue;
       const color = this.avatars.get(owner)?.info.color ?? 0xffffff;
       const sprites = [a, b].map((i) => {
         const s = new Sprite(this.tex.hole);
@@ -375,12 +385,12 @@ export class GameView {
         this.markerLayer.addChildAt(s, 0);
         return s;
       });
-      this.tunnels.set(owner, { a, b, sprites });
+      this.tunnels.set(key, { a, b, sprites });
     }
-    for (const [owner, t] of this.tunnels) {
-      if (seen.has(owner)) continue;
+    for (const [key, t] of this.tunnels) {
+      if (seen.has(key)) continue;
       t.sprites.forEach((s) => s.destroy());
-      this.tunnels.delete(owner);
+      this.tunnels.delete(key);
     }
   }
 
@@ -496,7 +506,7 @@ export class GameView {
 
   private applyPositions(pos: PlayerPos[], ack: number, snap: boolean): void {
     const seen = new Set<string>();
-    for (const [id, x, y, conn, lit, oil, ko, jitters, panic, dig] of pos) {
+    for (const [id, x, y, conn, lit, oil, ko, jitters, panic, dig, braces] of pos) {
       const a = this.avatars.get(id);
       if (!a) continue;
       seen.add(id);
@@ -508,6 +518,7 @@ export class GameView {
       a.stars.visible = ko > 0;
       a.jitters = jitters;
       a.dig = dig;
+      a.braces = braces;
       if (a.panic !== (panic === 1)) {
         a.panic = panic === 1;
         a.label.text = a.panic ? `${a.info.name} !!` : a.info.name;
@@ -533,6 +544,12 @@ export class GameView {
       }
     }
     this.reconcile(ack);
+    // The server turned a dig down (e.g. stone hiding behind soil we couldn't see yet).
+    const me = this.avatars.get(this.you);
+    if (this.digSeq && ack >= this.digSeq && me) {
+      if (me.dig === 0) this.say(me, "Can't dig here");
+      this.digSeq = 0;
+    }
     this.emitParty();
   }
 
@@ -587,7 +604,33 @@ export class GameView {
 
   private onKeyUp = (e: KeyboardEvent) => {
     this.keys.delete(e.code);
+    this.pushHandled = false;
+    this.pushSoilSince = 0;
   };
+
+  /** Why a dig from here wouldn't work, as far as we can see; null if it might. */
+  private digProblem(me: Avatar, dx: number, dy: number): string | null {
+    if (me.braces <= 0) return 'No root braces left';
+    let n = 1;
+    while (n <= MAX_TUNNEL_SOIL && this.knownTile(me.tx + dx * n, me.ty + dy * n) === Tile.Soil) n++;
+    const out = this.tiles[(me.ty + dy * n) * this.w + me.tx + dx * n];
+    if (out !== undefined && out !== UNKNOWN && !isWalkableTile(out)) return "Can't dig here";
+    const a = me.ty * this.w + me.tx;
+    const b = (me.ty + dy * n) * this.w + me.tx + dx * n;
+    for (const t of this.tunnels.values()) if (t.a === a || t.b === a || t.a === b || t.b === b) return 'Already a tunnel here';
+    return null;
+  }
+
+  /** A short message that floats up from a critter and fades. */
+  private say(a: Avatar, message: string): void {
+    const text = new Text({
+      text: message,
+      style: { fontFamily: 'Trebuchet MS, sans-serif', fontSize: 13, fill: 0xfff4e0, stroke: { color: 0x0b0a10, width: 3 } },
+    });
+    text.anchor.set(0.5, 1);
+    this.entityLayer.addChild(text);
+    this.floaters.push({ text, born: performance.now(), owner: a });
+  }
 
   private toggleLantern(): void {
     const me = this.avatars.get(this.you);
@@ -648,11 +691,19 @@ export class GameView {
           this.pushSoilSince = 0;
           return;
         }
+        if (this.pushHandled) return; // already answered this push; let go to try again
         if (!this.pushSoilSince) this.pushSoilSince = now;
         if (now - this.pushSoilSince < PUSH_TO_DIG_MS) return;
         this.pushSoilSince = 0;
+        this.pushHandled = true;
+        const problem = this.digProblem(me, ddx, ddy);
+        if (problem) {
+          this.say(me, problem);
+          return;
+        }
         action = { kind: 'dig', dir: dir as 'n' | 's' | 'e' | 'w' };
         const seq = ++this.seq;
+        this.digSeq = seq;
         this.pending.push({ seq, action });
         this.send({ t: 'intent', seq, action });
         this.readyAt = now + actionCost(action) * this.tickMs;
@@ -825,6 +876,7 @@ export class GameView {
       ko: 0,
       dig: 0,
       digBar,
+      braces: 0,
       jitters: 0,
       panic: false,
       root,
@@ -900,6 +952,19 @@ export class GameView {
     }
 
     this.drawGloom(now, dtMs);
+
+    // Floating messages rise and fade over 1.4 s.
+    this.floaters = this.floaters.filter((f) => {
+      const age = (now - f.born) / 1400;
+      if (age >= 1 || f.owner.root.destroyed) {
+        f.text.destroy();
+        return false;
+      }
+      f.text.position.set(f.owner.root.x, f.owner.root.y - TILE * 0.85 - age * 18);
+      f.text.alpha = 1 - age * age;
+      f.text.zIndex = 9999;
+      return true;
+    });
 
     // Camera: on you, except during a boss intro, when it glides over to watch the Gloom.
     const me = this.avatars.get(this.you);
@@ -1022,6 +1087,7 @@ export class GameView {
         ko: a.ko,
         jitters: a.jitters,
         panic: a.panic,
+        braces: a.braces,
       })),
     );
   }

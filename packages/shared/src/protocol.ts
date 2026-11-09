@@ -41,6 +41,8 @@ export type PlayerPos = [
   panic: 0 | 1,
   /** Ticks left digging a tunnel (0 = not digging). */
   dig: number,
+  /** Root braces left on this floor (each digs one tunnel). */
+  braces: number,
 ];
 
 export type ServerMessage =

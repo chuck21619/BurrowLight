@@ -209,6 +209,7 @@ export class Room {
         Math.round((p.jitters / JITTERS_MAX) * 100),
         p.panic ? 1 : 0,
         p.digging ? Math.max(0, p.digging.until - game.tick) : 0,
+        p.braces,
       ]);
     }
     return out;
