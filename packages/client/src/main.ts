@@ -464,9 +464,27 @@ game.onDebug = (t) => (debugEl.textContent = t);
 net.onMessage = async (msg) => {
   switch (msg.t) {
     case 'error':
+      if (rejoining && session) {
+        // The game we were trying to get back into is gone (the server restarted, went to sleep, or
+        // redeployed): stop retrying and say so, instead of "Reconnecting…" forever.
+        rejoining = false;
+        session = null;
+        try {
+          sessionStorage.removeItem('burrowlight.session');
+        } catch {
+          /* ignore */
+        }
+        history.replaceState(null, '', location.pathname);
+        status(null);
+        $('runover').hidden = true;
+        show('home');
+        setError('That game has ended: the server restarted. Make a new burrow to play again.');
+        break;
+      }
       setError(msg.message);
       break;
     case 'lobby':
+      rejoining = false;
       session = { code: msg.code, token: msg.token };
       saveSession(session);
       history.replaceState(null, '', `?room=${msg.code}`);
@@ -481,6 +499,7 @@ net.onMessage = async (msg) => {
       show('lobby');
       break;
     case 'welcome':
+      rejoining = false;
       session = { code: msg.code, token: msg.token };
       saveSession(session);
       history.replaceState(null, '', `?room=${msg.code}`);
@@ -501,6 +520,9 @@ net.onMessage = async (msg) => {
 
 // ---------- Reconnect ----------
 
+/** Waiting to hear whether the server still has our game. */
+let rejoining = false;
+
 net.onClose = () => {
   if (screen === 'home' || !session) return;
   reconnectUntil = Date.now() + RECONNECT_FOR_MS;
@@ -518,6 +540,7 @@ async function tryReconnect() {
   status('Reconnecting…');
   try {
     await net.connect();
+    rejoining = true;
     net.send({ t: 'join', code: session.code, name: playerName(), token: session.token });
   } catch {
     setTimeout(tryReconnect, 1000);
