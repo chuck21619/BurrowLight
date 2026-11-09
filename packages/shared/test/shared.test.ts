@@ -49,6 +49,9 @@ import {
   HEART_FULL,
   OIL_PER_FLOOR,
   type FloorMap,
+  GEM_FULL,
+  LOCKS_FROM_FLOOR,
+  type MirrorOrient,
 } from '../src/index';
 
 describe('rng', () => {
@@ -87,7 +90,7 @@ describe('map generation', () => {
 });
 
 /** A copy of the tiles with gates treated as floor (the gated pen's inside is reached by tunnelling). */
-const gatesOpen = (tiles: Uint8Array) => tiles.map((t) => (t === Tile.Gate ? Tile.Floor : t));
+const gatesOpen = (tiles: Uint8Array) => tiles.map((t) => (t === Tile.Gate || t === Tile.Door ? Tile.Floor : t));
 
 /** Build a tiny map from ASCII: # wall, . floor. */
 function asciiMap(rows: string[]): FloorMap {
@@ -95,7 +98,7 @@ function asciiMap(rows: string[]): FloorMap {
   const w = rows[0]!.length;
   const tiles = new Uint8Array(w * h);
   rows.forEach((r, y) => [...r].forEach((c, x) => (tiles[y * w + x] = c === '#' ? Tile.Wall : Tile.Floor)));
-  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [], emitters: [], mirrors: [], torches: [] };
+  return { w, h, tiles, rooms: [], entrance: { x: 1, y: 1 }, stairs: { x: 1, y: 1 }, sunshafts: [], hearts: [], traps: [], emitters: [], mirrors: [], torches: [], locks: [] };
 }
 
 describe('field of view', () => {
@@ -468,6 +471,7 @@ describe('sunbeams and mirrors', () => {
       const map = generateFloor(seed, (seed % 5) + 1, 2);
       const tileCell = (x: number, y: number) => beamCellOf(map.tiles[y * map.w + x] ?? Tile.Wall);
       const heartIdx = new Set(map.hearts.map((hp) => hp.y * map.w + hp.x));
+      for (const l of map.locks) if (l.gem) heartIdx.add(l.gem.y * map.w + l.gem.x); // sun gems are beam targets too
       const mirrorIdx = map.mirrors.map((m) => m.y * map.w + m.x);
       for (const e of map.emitters) {
         puzzles++;
@@ -1222,6 +1226,124 @@ describe('talents', () => {
     expect(lit.has(at(3, 1))).toBe(true);
     expect(lit.has(at(3, 3))).toBe(true);
     expect(lit.has(at(4, 2))).toBe(false); // the beam stops going straight
+  });
+});
+
+describe('doors, pressure plates and sun gems', () => {
+  /** Floors (from act 2) that have a lock, across seeds. */
+  const lockedFloors = () => {
+    const out: FloorMap[] = [];
+    for (let seed = 1; seed <= 150; seed++) {
+      const floor = LOCKS_FROM_FLOOR + (seed % 4); // 4, 5, 6(as a normal floor), 7
+      const map = generateFloor(seed, floor, 1 + (seed % 4));
+      if (map.locks.length) out.push(map);
+    }
+    return out;
+  };
+
+  it('never before act 2; afterwards, pens with one door opened by a plate or a sun gem', () => {
+    for (let seed = 1; seed <= 60; seed++) for (const f of [1, 2]) expect(generateFloor(seed, f, 2).locks).toEqual([]);
+    const floors = lockedFloors();
+    expect(floors.length).toBeGreaterThan(30);
+    let plates = 0;
+    let gems = 0;
+    for (const map of floors) {
+      const t = (p: { x: number; y: number }) => map.tiles[p.y * map.w + p.x];
+      const walk = distanceMap(map.tiles, map.w, map.h, map.entrance);
+      for (const l of map.locks) {
+        expect(t(l.door)).toBe(Tile.Door);
+        // The door sits in the wall ring two tiles from a Heartstone.
+        const heart = map.hearts.find((h) => Math.max(Math.abs(h.x - l.door.x), Math.abs(h.y - l.door.y)) === 2);
+        expect(heart).toBeDefined();
+        expect(Boolean(l.plate) !== Boolean(l.gem)).toBe(true);
+        if (l.plate) {
+          plates++;
+          expect(t(l.plate)).toBe(Tile.Plate);
+          expect(walk[l.plate.y * map.w + l.plate.x]).toBeGreaterThanOrEqual(0);
+        }
+        if (l.gem) {
+          gems++;
+          expect(t(l.gem)).toBe(Tile.Gem);
+          // Some mirror setting sends a beam into the gem, but it doesn't start that way.
+          const gi = l.gem.y * map.w + l.gem.x;
+          const cell = (x: number, y: number) => beamCellOf(map.tiles[y * map.w + x]!);
+          const hits = (orients: MirrorOrient[]) => {
+            const set = new Map(map.mirrors.map((m, k) => [m.y * map.w + m.x, orients[k]!]));
+            return map.emitters.some((e) => traceBeam(map.w, map.h, cell, e, (i) => set.get(i), () => false).at(-1) === gi);
+          };
+          expect(hits(map.mirrors.map((m) => m.orient))).toBe(false);
+          let solvable = false;
+          for (let mask = 0; mask < 1 << map.mirrors.length && !solvable; mask++)
+            solvable = hits(map.mirrors.map((_, k) => ((mask >> k) & 1) as MirrorOrient));
+          expect(solvable).toBe(true);
+        }
+      }
+    }
+    expect(plates).toBeGreaterThan(5);
+    expect(gems).toBeGreaterThan(5);
+  });
+
+  /** A game on a floor with a plate lock (or a gem lock), traps cleared. */
+  const lockedGame = (kind: 'plate' | 'gem') => {
+    for (let seed = 1; seed < 400; seed++) {
+      const game = createGame(seed, [
+        { id: 'a', name: 'A', color: 1 },
+        { id: 'b', name: 'B', color: 2 },
+      ], LOCKS_FROM_FLOOR + (seed % 2));
+      const lock = game.locks.find((l) => (kind === 'plate' ? l.plate >= 0 : l.gem >= 0));
+      if (!lock) continue;
+      game.traps.clear();
+      return { game, lock };
+    }
+    throw new Error('no locked floor found');
+  };
+  const put = (game: ReturnType<typeof createGame>, id: string, i: number) => {
+    const p = game.players.get(id)!;
+    p.x = i % game.map.w;
+    p.y = Math.floor(i / game.map.w);
+  };
+
+  it('a plate holds its door open while someone stands on it, and the door never shuts on a critter', () => {
+    const { game, lock } = lockedGame('plate');
+    expect(game.map.tiles[lock.door]).toBe(Tile.Door);
+    put(game, 'a', lock.plate);
+    step(game);
+    expect(lock.open).toBe(true);
+    expect(game.map.tiles[lock.door]).toBe(Tile.DoorOpen);
+    // B stands in the doorway; A steps off the plate: the door stays open until B moves on.
+    put(game, 'b', lock.door);
+    put(game, 'a', game.map.entrance.y * game.map.w + game.map.entrance.x);
+    step(game);
+    expect(lock.open).toBe(true);
+    put(game, 'b', game.map.entrance.y * game.map.w + game.map.entrance.x);
+    step(game);
+    expect(lock.open).toBe(false);
+    expect(game.map.tiles[lock.door]).toBe(Tile.Door);
+    // A set-down mirror holds a plate too (Mirror Pack).
+    game.mirrors.set(lock.plate, 0);
+    step(game);
+    expect(lock.open).toBe(true);
+  });
+
+  it('a sun gem fills while a sunbeam ends in it and then opens its door for good', () => {
+    const { game, lock } = lockedGame('gem');
+    // Find the mirror setting that lights the gem.
+    const mirrors = [...game.mirrors.keys()];
+    const { map } = game;
+    const cell = (x: number, y: number) => beamCellOf(map.tiles[y * map.w + x]!);
+    for (let mask = 0; mask < 1 << mirrors.length; mask++) {
+      mirrors.forEach((m, k) => game.mirrors.set(m, ((mask >> k) & 1) as MirrorOrient));
+      if (map.emitters.some((e) => traceBeam(map.w, map.h, cell, e, (i) => game.mirrors.get(i), () => false).at(-1) === lock.gem)) break;
+    }
+    // Keep critters out of the beams.
+    for (const id of ['a', 'b']) put(game, id, map.entrance.y * map.w + map.entrance.x);
+    for (let i = 0; i < GEM_FULL + 2; i++) step(game);
+    expect(lock.solved).toBe(true);
+    expect(game.map.tiles[lock.door]).toBe(Tile.DoorOpen);
+    // Turning the mirrors away again doesn't shut it.
+    for (const m of mirrors) game.mirrors.set(m, (1 - game.mirrors.get(m)!) as MirrorOrient);
+    for (let i = 0; i < 5; i++) step(game);
+    expect(lock.open).toBe(true);
   });
 });
 

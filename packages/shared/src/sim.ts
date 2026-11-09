@@ -26,6 +26,7 @@ import {
   BASE_SPEED,
   DIRS,
   HEART_FADE,
+  GEM_FULL,
   HEART_FULL,
   KO_TICKS,
   LANTERN_RADIUS,
@@ -190,6 +191,21 @@ export interface GameState {
   tunnels: Tunnel[];
   /** Mirrors set down with Mirror Pack: tile index -> who placed it. */
   placedMirrors: Map<number, string>;
+  /** Pen doors and what opens them. */
+  locks: LockState[];
+}
+
+export interface LockState {
+  door: number;
+  /** Pressure plate tile index, or -1. */
+  plate: number;
+  /** Sun gem tile index, or -1. */
+  gem: number;
+  /** Ticks of sunbeam the gem has soaked up. */
+  charge: number;
+  open: boolean;
+  /** The gem filled: the door stays open for good. */
+  solved: boolean;
 }
 
 export interface RunStats {
@@ -316,6 +332,8 @@ function enterFloor(state: GameState, n: number): void {
   state.torches = new Map(map.torches.map((t) => [t.y * map.w + t.x, t.lit]));
   state.tunnels = [];
   state.placedMirrors = new Map();
+  const at = (p: { x: number; y: number } | undefined) => (p ? p.y * map.w + p.x : -1);
+  state.locks = map.locks.map((l) => ({ door: at(l.door), plate: at(l.plate), gem: at(l.gem), charge: 0, open: false, solved: false }));
   for (const p of state.players.values()) {
     p.digging = null;
     p.braces = BURROW_BRACES_PER_FLOOR + (p.talents.has('deepPockets') ? 1 : 0);
@@ -469,6 +487,8 @@ export function step(state: GameState, opts: StepOptions = {}): void {
     return;
   }
 
+  updateLocks(state, order);
+
   for (const p of order) {
     if (!p.lit) continue;
     if (p.talents.has('thriftyWick') && state.tick % 2 === 1) continue; // half the burn
@@ -516,6 +536,34 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       state.descended = true;
     }
   }
+}
+
+/**
+ * Pen doors: a pressure plate holds its door open while a critter (or a set-down mirror) is on it;
+ * a sun gem soaks up sunbeam light (fading when the beam leaves) and, once full, opens its door for
+ * good. A door never shuts on a critter standing in the doorway.
+ */
+function updateLocks(state: GameState, order: PlayerState[]): void {
+  const { map } = state;
+  const ends = new Set(state.beams.map((b) => b[b.length - 1]));
+  const on = (i: number) => order.some((p) => p.y * map.w + p.x === i);
+  for (const l of state.locks) {
+    if (l.gem >= 0 && !l.solved) {
+      l.charge = ends.has(l.gem) ? Math.min(GEM_FULL, l.charge + 1) : Math.max(0, l.charge - 1);
+      if (l.charge >= GEM_FULL) l.solved = true;
+    }
+    const pressed = l.plate >= 0 && (on(l.plate) || state.mirrors.has(l.plate));
+    const want = l.solved || pressed || (l.open && on(l.door));
+    if (want !== l.open) {
+      l.open = want;
+      map.tiles[l.door] = want ? Tile.DoorOpen : Tile.Door;
+    }
+  }
+}
+
+/** Locks for the wire: flat [door, plate, gem, charge 0–100, open, ...]. */
+export function packLocks(state: GameState): number[] {
+  return state.locks.flatMap((l) => [l.door, l.plate, l.gem, Math.round((l.charge / GEM_FULL) * 100), l.open ? 1 : 0]);
 }
 
 /**
@@ -959,7 +1007,7 @@ function useMirrorPack(state: GameState, p: PlayerState): void {
   }
   const t = tileAt(map, p.x, p.y);
   const empty =
-    (t === Tile.Floor || t === Tile.StoneFloor) &&
+    (t === Tile.Floor || t === Tile.StoneFloor || t === Tile.Plate) &&
     !state.mirrors.has(here) &&
     !state.torches.has(here) &&
     !state.tunnels.some((tn) => tn.a === here || tn.b === here);

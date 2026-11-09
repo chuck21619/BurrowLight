@@ -28,6 +28,14 @@ export interface Textures {
   hole: Texture;
   /** index 0 = "/", 1 = "\" */
   mirror: [Texture, Texture];
+  /** A wooden pen door, shut. */
+  door: Texture;
+  /** The same doorway, open. */
+  doorOpen: Texture;
+  /** index 0 = up, 1 = pressed down */
+  plate: [Texture, Texture];
+  /** A sun gem on its pedestal: index 0 = dim, 1 = full of sunlight */
+  gem: [Texture, Texture];
 }
 
 /** Placeholder pixel art drawn in code until the CC0 tileset goes in (M5). */
@@ -147,6 +155,41 @@ export function makeTextures(renderer: Renderer): Textures {
     for (const x of [2, 6, 10, 14]) px(g, x, 1, 0x8a8ea0, 1, 1); // spikes catch the light
   });
 
+  // A wooden door set into the wall, with iron bands and a ring handle.
+  const door = bake((g) => {
+    px(g, 0, 0, 0x3e2f2a, SRC, SRC);
+    px(g, 2, 1, 0x9a6a3c, 12, 15);
+    for (const x of [5, 8, 11]) px(g, x, 1, 0x7c5230, 1, 15); // planks
+    px(g, 2, 4, 0x4a4a55, 12, 1); // iron bands
+    px(g, 2, 11, 0x4a4a55, 12, 1);
+    px(g, 11, 8, 0xd8b45a, 2, 2); // handle
+  });
+  const doorOpen = bake((g) => {
+    floorBase(g);
+    px(g, 0, 0, 0x3e2f2a, 2, SRC); // door frame
+    px(g, 14, 0, 0x3e2f2a, 2, SRC);
+    px(g, 2, 0, 0x9a6a3c, 2, SRC); // the door, swung back against the frame
+  });
+  // A pressure plate: a stone slab with a brass rim, sunk in when pressed.
+  const plateDraw = (g: Graphics, down: boolean) => {
+    floorBase(g);
+    px(g, 2, 2, 0xb08a4c, 12, 12);
+    px(g, 3, 3, down ? 0x5c5e6a : 0x8a8c98, 10, 10);
+    if (!down) px(g, 3, 3, 0xa4a6b2, 10, 1);
+    px(g, 7, 7, down ? 0x4a4c56 : 0x6a6c78, 2, 2);
+  };
+  const plate: [Texture, Texture] = [bake((g) => plateDraw(g, false)), bake((g) => plateDraw(g, true))];
+  // A sun gem: a golden crystal on a pedestal.
+  const gemDraw = (g: Graphics, full: boolean) => {
+    floorBase(g);
+    px(g, 4, 12, 0x8a8090, 8, 3);
+    px(g, 5, 11, 0x9d93a3, 6, 1);
+    px(g, 6, 5, full ? 0xffd25e : 0x9a7a3a, 4, 6);
+    px(g, 7, 4, full ? 0xffe9a0 : 0xb0904a, 2, 1);
+    px(g, 7, 6, full ? 0xfffbe0 : 0xc4a460, 1, 3);
+  };
+  const gem: [Texture, Texture] = [bake((g) => gemDraw(g, false)), bake((g) => gemDraw(g, true))];
+
   const hole = bake((g) => {
     g.ellipse(8, 9, 6, 4).fill(0x3a2a1c);
     g.ellipse(8, 9, 4, 2.5).fill(0x120c08);
@@ -237,5 +280,9 @@ export function makeTextures(renderer: Renderer): Textures {
     stoneFloor,
     gate,
     hole,
+    door,
+    doorOpen,
+    plate,
+    gem,
   };
 }

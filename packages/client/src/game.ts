@@ -175,6 +175,10 @@ export class GameView {
   private floaters: { text: Text; born: number; owner: Avatar }[] = [];
   private burrowRequested = false;
   private torchSprites = new Map<number, Sprite>();
+  /** Pen doors and what opens them, from the server. */
+  private locks: { door: number; plate: number; gem: number; charge: number; open: boolean; gemGlow: Sprite | null }[] = [];
+  /** Has this player ever seen a pen door open (for the lock tip)? */
+  private doorOpenedOnce = false;
   /** Ticks left in a boss intro (input is ignored and the camera watches the Gloom). */
   private intro = 0;
   private camX = 0;
@@ -269,6 +273,8 @@ export class GameView {
     }
     this.beamGfx = new Graphics();
     this.addTiles(msg.tiles);
+    this.locks = [];
+    this.setLocks(msg.locks);
     for (const t of msg.traps) this.addTrap(t);
     this.setMirrors(msg.mirrors);
     this.setTorches(msg.torches);
@@ -314,6 +320,7 @@ export class GameView {
   applyTick(msg: Tick): void {
     this.serverTick = msg.tick;
     this.addTiles(msg.tiles);
+    this.setLocks(msg.locks);
     this.setTraps(msg.traps);
     this.setParty(msg.party);
     msg.heartCharge.forEach((c, k) => {
@@ -487,8 +494,51 @@ export class GameView {
     if (flat.length) this.lightDirty = true;
   }
 
+  /** Pen doors open and shut; plates press down; sun gems fill with sunlight. */
+  private setLocks(flat: number[]): void {
+    for (let k = 0, n = 0; k < flat.length; k += 5, n++) {
+      const [door, plate, gem, charge, open] = flat.slice(k, k + 5) as [number, number, number, number, number];
+      let l = this.locks[n];
+      if (!l) {
+        l = { door, plate, gem, charge: -1, open: false, gemGlow: null };
+        if (gem >= 0) {
+          l.gemGlow = new Sprite(this.tex.gem[1]);
+          l.gemGlow.position.set((gem % this.w) * TILE, Math.floor(gem / this.w) * TILE);
+          l.gemGlow.scale.set(SCALE);
+          l.gemGlow.alpha = 0;
+          this.markerLayer.addChild(l.gemGlow);
+        }
+        this.locks[n] = l;
+      }
+      if (l.gemGlow) {
+        l.gemGlow.alpha = charge / 100;
+        l.gemGlow.visible = this.tiles[gem] !== UNKNOWN;
+      }
+      l.charge = charge;
+      const isOpen = open === 1;
+      if (isOpen) this.doorOpenedOnce ||= this.tiles[door] !== UNKNOWN;
+      if (this.tiles[door] !== UNKNOWN && this.tiles[door] !== (isOpen ? Tile.DoorOpen : Tile.Door)) {
+        this.tiles[door] = isOpen ? Tile.DoorOpen : Tile.Door;
+        const s = this.tileSprites[door];
+        if (s) s.texture = isOpen ? this.tex.doorOpen : this.tex.door;
+        this.lightDirty = true;
+      }
+      const ps = plate >= 0 ? this.tileSprites[plate] : undefined;
+      if (ps) ps.texture = this.tex.plate[isOpen ? 1 : 0];
+      l.open = isOpen;
+    }
+  }
+
   private textureFor(type: number, x: number, y: number) {
     switch (type) {
+      case Tile.Door:
+        return this.tex.door;
+      case Tile.DoorOpen:
+        return this.tex.doorOpen;
+      case Tile.Plate:
+        return this.tex.plate[0];
+      case Tile.Gem:
+        return this.tex.gem[0];
       case Tile.Wall:
         return this.tex.wall;
       case Tile.StairsDown:
@@ -803,7 +853,7 @@ export class GameView {
         // Pushing into soft soil for a moment starts digging a tunnel under it.
         const [ddx, ddy] = DIRS[dir];
         const ahead = this.knownTile(me.tx + ddx, me.ty + ddy);
-        const pushing = !isDiagonal(dir) && held === dir && (ahead === Tile.Wall || ahead === Tile.Gate);
+        const pushing = !isDiagonal(dir) && held === dir && (ahead === Tile.Wall || ahead === Tile.Gate || ahead === Tile.Door);
         if (!pushing) {
           this.pushSoilSince = 0;
           return;
@@ -1227,6 +1277,13 @@ export class GameView {
       if (this.gateSeen && this.tunnels.size === 0) tip = 'That Heartstone is fenced in. Walk into the gate and hold to dig under it.';
       else if (this.tunnels.size > 0 && !this.usedTunnelKey)
         tip = 'You came out the other side! To go back through, stand on a tunnel hole and press Q.';
+    } else if (unfinished && !this.doorOpenedOnce) {
+      // First locked pens (act 2): one short hint per kind, until a door has been opened once.
+      const seen = this.locks.filter((l) => !l.open && this.tiles[l.door] !== UNKNOWN);
+      if (seen.some((l) => l.plate >= 0 && this.tiles[l.plate] !== UNKNOWN))
+        tip = 'A locked pen! Someone stand on the pressure plate to hold its door open (or dig under the wall).';
+      else if (seen.some((l) => l.gem >= 0 && this.tiles[l.gem] !== UNKNOWN))
+        tip = 'A locked pen! Turn the mirrors to shine a sunbeam into the sun gem, and the door opens for good.';
     }
     if (tip !== this.lastTip) {
       this.lastTip = tip;

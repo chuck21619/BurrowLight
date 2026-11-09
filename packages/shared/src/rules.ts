@@ -51,6 +51,8 @@ export const KO_TICKS = 100;
  * faster) and slowly fade when dark. One lantern fills one in 6 s, two lanterns or a sunbeam in 3 s.
  */
 export const HEART_FULL = 60;
+/** Ticks of sunbeam a sun gem needs before its door opens for good. */
+export const GEM_FULL = 20;
 export const HEART_FADE = 1;
 // ---- The Gloom (act 1 boss) ----
 /** A run is three acts of three floors; beating floor 9's boss and gathering on its ladder wins. */

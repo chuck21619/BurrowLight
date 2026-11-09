@@ -21,6 +21,7 @@ import {
   runSummary,
   learnTalent,
   packParty,
+  packLocks,
   type TalentId,
   step,
   type Action,
@@ -62,6 +63,8 @@ export class Room {
   constructor(
     readonly code: string,
     private readonly startFloor = 1,
+    /** A fixed seed, for testing on a development server only. */
+    private readonly devSeed: number | null = null,
   ) {}
 
   get connectedCount(): number {
@@ -131,7 +134,7 @@ export class Room {
     if (memberId !== this.hostId) return 'Only the host can start.';
     if (![...this.members.values()].every((m) => m.ready)) return 'Everyone needs to be ready.';
     this.phase = 'playing';
-    const seed = randomInt(1, 2 ** 31);
+    const seed = this.devSeed ?? randomInt(1, 2 ** 31);
     this.game = createGame(
       seed,
       [...this.members.values()].map((m) => ({ id: m.id, name: m.name, color: m.color })),
@@ -205,6 +208,7 @@ export class Room {
         tunnels: packTunnels(game),
         summary,
         party,
+        locks: packLocks(game),
       });
     }
   }
@@ -267,6 +271,7 @@ export class Room {
       tunnels: packTunnels(game),
       summary: game.runOver || game.runWon ? runSummary(game) : null,
       party: packParty(game),
+      locks: packLocks(game),
     });
   }
 

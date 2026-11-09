@@ -4,8 +4,8 @@ import type { TalentId } from './talents';
 
 // ---- Client -> server ----
 export type ClientMessage =
-  /** `startFloor` is honoured only by a development server, for testing later floors. */
-  | { t: 'create'; name: string; startFloor?: number }
+  /** `startFloor` and `seed` are honoured only by a development server, for testing later floors. */
+  | { t: 'create'; name: string; startFloor?: number; seed?: number }
   | { t: 'join'; code: string; name: string; token?: string }
   | { t: 'ready'; ready: boolean }
   | { t: 'start' }
@@ -98,6 +98,8 @@ export type ServerMessage =
       /** Set once the run has ended (won or lost). */
       summary: RunSummary | null;
       party: PartyTalents;
+      /** Pen doors: flat [door, plate, gem, gemCharge 0–100, open, ...] (-1 = none). */
+      locks: number[];
     }
   | {
       t: 'tick';
@@ -120,6 +122,7 @@ export type ServerMessage =
       tunnels: [number, number, string][];
       summary: RunSummary | null;
       party: PartyTalents;
+      locks: number[];
     };
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPRSTUVWXY'; // no I, L, O, Q, Z

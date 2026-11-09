@@ -15,6 +15,14 @@ export const Tile = {
   StoneFloor: 6,
   /** Iron bars: block walking and light like a wall (critters can tunnel under them). */
   Gate: 7,
+  /** A shut wooden door: blocks walking and light (critters can tunnel under it). */
+  Door: 8,
+  /** The same door, open: walk and see through it. */
+  DoorOpen: 9,
+  /** A pressure plate: holds its door open while a critter (or a set-down mirror) is on it. */
+  Plate: 10,
+  /** A sun gem on a pedestal: catch sunlight in it to open its door for good. Doesn't block light. */
+  Gem: 11,
 } as const;
 export type TileType = (typeof Tile)[keyof typeof Tile];
 
@@ -53,17 +61,32 @@ export interface FloorMap {
   introTorch?: Point;
   /** Floor 2: index of the room holding the gated Heartstone pen. */
   penRoom?: number;
+  /** Walled Heartstone pens with a door, opened by a pressure plate or a sun gem. */
+  locks: Lock[];
+}
+
+/** A door and what opens it: a pressure plate (held) or a sun gem (lit by a sunbeam, opens for good). */
+export interface Lock {
+  door: Point;
+  plate?: Point;
+  gem?: Point;
 }
 
 export const isWalkable = (t: number): boolean =>
-  t === Tile.Floor || t === Tile.StairsDown || t === Tile.Sunshaft || t === Tile.Sunbeam || t === Tile.StoneFloor;
-export const blocksSight = (t: number): boolean => t === Tile.Wall || t === Tile.Gate;
+  t === Tile.Floor ||
+  t === Tile.StairsDown ||
+  t === Tile.Sunshaft ||
+  t === Tile.Sunbeam ||
+  t === Tile.StoneFloor ||
+  t === Tile.DoorOpen ||
+  t === Tile.Plate;
+export const blocksSight = (t: number): boolean => t === Tile.Wall || t === Tile.Gate || t === Tile.Door;
 export const beamCellOf = (t: number): BeamCell =>
-  t === Tile.Wall || t === Tile.Gate ? 'wall' : t === Tile.Heartstone ? 'absorb' : 'open';
+  blocksSight(t) ? 'wall' : t === Tile.Heartstone || t === Tile.Gem ? 'absorb' : 'open';
 /** Ground you can dig a tunnel from, or come up in: dirt, not paved stone. */
 export const isDiggableGround = (t: number): boolean => t === Tile.Floor || t === Tile.Sunshaft;
 /** What a tunnel can pass under. */
-export const canTunnelUnder = (t: number): boolean => t === Tile.Wall || t === Tile.Gate;
+export const canTunnelUnder = (t: number): boolean => t === Tile.Wall || t === Tile.Gate || t === Tile.Door;
 
 export function tileAt(map: FloorMap, x: number, y: number): number {
   if (x < 0 || y < 0 || x >= map.w || y >= map.h) return Tile.Wall;
@@ -86,7 +109,7 @@ export function generateFloor(seed: number, floor = 1, heartCount = 1): FloorMap
   const rng = createRng(hashSeed(seed, floor, heartCount));
   for (let attempt = 0; attempt < 100; attempt++) {
     const map = tryGenerate(rng, roomCountFor(floor, rng));
-    if (map && placeFeatures(rng, map, heartCount, floor === BURROW_INTRO_FLOOR)) return map;
+    if (map && placeFeatures(rng, map, heartCount, floor === BURROW_INTRO_FLOOR, floor >= LOCKS_FROM_FLOOR)) return map;
   }
   throw new Error(`could not generate floor for seed ${seed}`);
 }
@@ -205,6 +228,7 @@ function tryGenerate(rng: Rng, roomCount: number): FloorMap | null {
     emitters: [],
     mirrors: [],
     torches: [],
+    locks: [],
   };
 }
 
@@ -217,7 +241,7 @@ const SAFE_START_RADIUS = 2;
  * Sunshafts, Heartstones and hidden traps. Every floor starts in a sunshaft so the party can see.
  * Heartstones go on room tiles with floor all around, so they can never cut off a path.
  */
-function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro = false): boolean {
+function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro = false, locks = false): boolean {
   const { w, tiles } = map;
   const idx = (p: Point) => p.y * w + p.x;
   const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
@@ -247,39 +271,21 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro 
   const order = [...others, ...map.rooms.filter((r) => r === stairsRoom && r !== entranceRoom), entranceRoom];
   /** Tiles a puzzle uses (beam path, mirrors, emitters): no traps or other features go here. */
   const used = new Set<number>();
+  /** Rooms that must stay dirt (pens, so tunnelling in is always an option). */
+  const dirtRooms = new Set<number>();
   for (let k = 0; k < heartCount; k++) {
     // Spread across rooms; when there are more Heartstones than rooms, rooms take several.
     const room = order[k % order.length]!;
     // Burrowing intro: the first Heartstone sits in a gated pen, visible but out of reach on foot.
     if (burrowIntro && k === 0) {
-      const penSpots = interior(room).filter((p) => {
-        for (let dy = -2; dy <= 2; dy++)
-          for (let dx = -2; dx <= 2; dx++) {
-            const i = (p.y + dy) * w + p.x + dx;
-            if (tiles[i] !== Tile.Floor || used.has(i)) return false;
-          }
-        // Room to stand on dirt outside the gate.
-        return [[3, 0], [-3, 0], [0, 3], [0, -3]].some(([dx, dy]) => tiles[(p.y + dy!) * w + p.x + dx!] === Tile.Floor);
-      });
-      if (!penSpots.length) return false;
-      const heart = rng.pick(penSpots);
-      tiles[idx(heart)] = Tile.Heartstone;
-      map.hearts.push(heart);
-      for (let dy = -2; dy <= 2; dy++)
-        for (let dx = -2; dx <= 2; dx++) {
-          const i = (heart.y + dy) * w + heart.x + dx;
-          if (Math.max(Math.abs(dx), Math.abs(dy)) === 2) tiles[i] = Tile.Gate;
-          used.add(i);
-        }
-      // Keep the area just outside the gate clear too, so there's dirt to dig from.
-      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) used.add((heart.y + dy) * w + heart.x + dx);
-      // The pen must never cut anything else off: everything outside it stays reachable on foot.
-      const walkDist = distanceMap(tiles, w, map.h, map.entrance);
-      for (let i = 0; i < tiles.length; i++) {
-        const inside = Math.max(Math.abs((i % w) - heart.x), Math.abs(Math.floor(i / w) - heart.y)) <= 1;
-        if (!inside && isWalkable(tiles[i]!) && walkDist[i]! < 0) return false;
-      }
+      if (!buildPen(rng, map, room, used, interior, false)) return false;
       map.penRoom = map.rooms.indexOf(room);
+      continue;
+    }
+    // From act 2, some Heartstones sit in a walled pen behind a door: hold a pressure plate, or catch
+    // sunlight in a sun gem, to open it (or tunnel in: pen rooms are always dirt).
+    if (locks && map.locks.length < MAX_LOCKS && rng.chance(LOCK_CHANCE) && buildPen(rng, map, room, used, interior, true)) {
+      dirtRooms.add(map.rooms.indexOf(room));
       continue;
     }
     const spots = interior(room).filter((p) => !used.has(idx(p)) && map.hearts.every((hp) => cheb(hp, p) >= 3));
@@ -305,7 +311,7 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro 
     }
   }
 
-  // No beam may start out already lighting a Heartstone: re-scramble the mirrors until none does.
+  // No beam may start out already lighting a Heartstone or sun gem: re-scramble until none does.
   if (map.emitters.length && !scrambleUntilUnsolved(rng, map)) return false;
 
   // A few unlit torches: free light for whoever carries a flame over them. Never close enough to a
@@ -326,7 +332,7 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro 
     used.add(t.y * w + t.x);
   }
 
-  paveRooms(rng, map, entranceRoom);
+  paveRooms(rng, map, entranceRoom, dirtRooms);
 
   // Hidden traps: never near the entrance, next to a Heartstone, or on special tiles.
   for (let i = 0; i < tiles.length; i++) {
@@ -336,6 +342,124 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro 
     if (map.hearts.some((hp) => cheb(p, hp) <= 1)) continue;
     if (rng.chance(roomOf(p) ? TRAP_CHANCE_ROOM : TRAP_CHANCE_CORRIDOR)) map.traps.push(i);
   }
+  return true;
+}
+
+/** Doors, plates and sun gems appear from act 2 on. */
+export const LOCKS_FROM_FLOOR = 4;
+const LOCK_CHANCE = 0.45;
+const MAX_LOCKS = 2;
+
+/**
+ * Put a Heartstone in a 3×3 pen: a ring of gate bars (the burrowing intro) or of wall with one door
+ * (a lock). A lock's door is opened by a pressure plate somewhere in the room, or by a sun gem lit
+ * through a mirror puzzle. The pen never cuts anything else off.
+ */
+function buildPen(
+  rng: Rng,
+  map: FloorMap,
+  room: Rect,
+  used: Set<number>,
+  interior: (r: Rect) => Point[],
+  lock: boolean,
+): boolean {
+  const { w, h, tiles } = map;
+  const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const sides: [number, number][] = [
+    [3, 0],
+    [-3, 0],
+    [0, 3],
+    [0, -3],
+  ];
+  const spots = interior(room).filter((p) => {
+    if (map.hearts.some((hp) => cheb(hp, p) < 4)) return false;
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        const i = (p.y + dy) * w + p.x + dx;
+        if (tiles[i] !== Tile.Floor || used.has(i)) return false;
+      }
+    // Room to stand outside the pen (on dirt to dig from, or at the door).
+    return sides.some(([dx, dy]) => tiles[(p.y + dy) * w + p.x + dx] === Tile.Floor);
+  });
+  if (!spots.length) return false;
+  const heart = rng.pick(spots);
+  const doorSide = lock ? rng.pick(sides.filter(([dx, dy]) => tiles[(heart.y + dy) * w + heart.x + dx] === Tile.Floor)) : null;
+  const door = doorSide ? { x: heart.x + (doorSide[0] / 3) * 2, y: heart.y + (doorSide[1] / 3) * 2 } : null;
+
+  // Lay it down tentatively, so it can be undone if it cuts something off.
+  const before = new Map<number, number>();
+  const set = (p: Point, t: number) => {
+    const i = p.y * w + p.x;
+    if (!before.has(i)) before.set(i, tiles[i]!);
+    tiles[i] = t;
+  };
+  const undo = () => {
+    for (const [i, t] of before) tiles[i] = t;
+  };
+  set(heart, Tile.Heartstone);
+  for (let dy = -2; dy <= 2; dy++)
+    for (let dx = -2; dx <= 2; dx++)
+      if (Math.max(Math.abs(dx), Math.abs(dy)) === 2) set({ x: heart.x + dx, y: heart.y + dy }, lock ? Tile.Wall : Tile.Gate);
+  if (door) set(door, Tile.Door);
+  const walkDist = distanceMap(tiles, w, h, map.entrance);
+  for (let i = 0; i < tiles.length; i++) {
+    const inPen = cheb({ x: i % w, y: Math.floor(i / w) }, heart) <= 1;
+    if (!inPen && isWalkable(tiles[i]!) && walkDist[i]! < 0) {
+      undo();
+      return false;
+    }
+  }
+  const penTiles: number[] = [];
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) penTiles.push((heart.y + dy) * w + heart.x + dx);
+  const reserved = [...penTiles];
+  if (doorSide) reserved.push((heart.y + doorSide[1]) * w + heart.x + doorSide[0]); // the doorstep stays clear
+  for (const i of reserved) used.add(i);
+
+  if (door) {
+    const lockDef: Lock = { door };
+    // A sun gem (opened by a mirror puzzle), or a pressure plate a few steps from the door.
+    let made = false;
+    if (rng.chance(0.5)) {
+      const gemSpots = interior(room).filter(
+        (p) => !used.has(p.y * w + p.x) && cheb(p, heart) >= 3 && cheb(p, heart) <= 5 && tiles[p.y * w + p.x] === Tile.Floor,
+      );
+      for (let tries = 0; tries < 6 && gemSpots.length && !made; tries++) {
+        const gem = gemSpots.splice(rng.int(0, gemSpots.length - 1), 1)[0]!;
+        tiles[gem.y * w + gem.x] = Tile.Gem;
+        used.add(gem.y * w + gem.x);
+        if (buildBeamPuzzle(rng, map, gem, used)) {
+          lockDef.gem = gem;
+          made = true;
+        } else {
+          tiles[gem.y * w + gem.x] = Tile.Floor;
+          used.delete(gem.y * w + gem.x);
+        }
+      }
+    }
+    if (!made) {
+      const plateSpots: Point[] = [];
+      for (let y = room.y; y < room.y + room.h; y++)
+        for (let x = room.x; x < room.x + room.w; x++) {
+          const p = { x, y };
+          const d = cheb(p, door);
+          if (d >= 2 && d <= 5 && tiles[y * w + x] === Tile.Floor && !used.has(y * w + x) && walkDist[y * w + x]! >= 0) plateSpots.push(p);
+        }
+      if (!plateSpots.length) {
+        undo();
+        for (const i of reserved) used.delete(i);
+        return false;
+      }
+      const plate = rng.pick(plateSpots);
+      tiles[plate.y * w + plate.x] = Tile.Plate;
+      used.add(plate.y * w + plate.x);
+      lockDef.plate = plate;
+    }
+    map.locks.push(lockDef);
+  } else {
+    // Keep the area just outside the gate clear too, so there's dirt to dig from.
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) used.add((heart.y + dy) * w + heart.x + dx);
+  }
+  map.hearts.push(heart);
   return true;
 }
 
@@ -350,10 +474,10 @@ const PAVED_ROOM_CHANCE = 0.3;
  * Pave some rooms with stone: you can walk there, but not dig from or into them. Most ground stays
  * dirt. The entrance room and the gated pen's room are always dirt.
  */
-function paveRooms(rng: Rng, map: FloorMap, entranceRoom: Rect): void {
+function paveRooms(rng: Rng, map: FloorMap, entranceRoom: Rect, dirtRooms: Set<number>): void {
   const { w, tiles } = map;
   map.rooms.forEach((r, k) => {
-    if (r === entranceRoom || k === map.penRoom || !rng.chance(PAVED_ROOM_CHANCE)) return;
+    if (r === entranceRoom || k === map.penRoom || dirtRooms.has(k) || !rng.chance(PAVED_ROOM_CHANCE)) return;
     for (let y = r.y; y < r.y + r.h; y++)
       for (let x = r.x; x < r.x + r.w; x++) if (tiles[y * w + x] === Tile.Floor) tiles[y * w + x] = Tile.StoneFloor;
   });
@@ -465,6 +589,7 @@ function buildBeamPuzzle(rng: Rng, map: FloorMap, heart: Point, used: Set<number
 function scrambleUntilUnsolved(rng: Rng, map: FloorMap): boolean {
   const { w, h, tiles } = map;
   const hearts = new Set(map.hearts.map((p) => p.y * w + p.x));
+  for (const l of map.locks) if (l.gem) hearts.add(l.gem.y * w + l.gem.x);
   const cell = (x: number, y: number) => beamCellOf(tiles[y * w + x]!);
   for (let tries = 0; tries < 40; tries++) {
     const set = new Map(map.mirrors.map((m) => [m.y * w + m.x, m.orient]));
@@ -643,6 +768,7 @@ function tryBossRoom(rng: Rng): FloorMap | null {
     torches,
     gloomStart,
     introTorch,
+    locks: [],
   };
 }
 

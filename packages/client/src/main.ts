@@ -104,7 +104,9 @@ $('create').addEventListener('click', async () => {
   setError('');
   // Dev only: ?floor=3 starts the run on floor 3 (a boss floor) for testing.
   const devFloor = import.meta.env.DEV ? Number(new URLSearchParams(location.search).get('floor')) || 1 : 1;
-  if (await ensureConnected()) net.send({ t: 'create', name: playerName(), startFloor: devFloor });
+  // Dev only: ?seed=N replays the same run.
+  const devSeed = import.meta.env.DEV ? Number(new URLSearchParams(location.search).get('seed')) || undefined : undefined;
+  if (await ensureConnected()) net.send({ t: 'create', name: playerName(), startFloor: devFloor, seed: devSeed });
 });
 
 async function join(code: string) {
