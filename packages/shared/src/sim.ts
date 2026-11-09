@@ -81,6 +81,8 @@ import {
   GIANT_SETTLE,
   GIANT_KEEPS,
   GIANT_AWAKE_TICKS,
+  GIANT_JITTERS,
+  GIANT_JITTERS_CAP,
   JITTERS_CALM,
   JITTERS_DARK,
   JITTERS_DARK_WITH_FRIEND,
@@ -1038,7 +1040,8 @@ function updateGiant(state: GameState, order: PlayerState[]): boolean {
   g.awakeUntil = state.tick + GIANT_AWAKE_TICKS;
   for (const p of order) {
     p.lit = false;
-    p.jitters = Math.min(JITTERS_MAX, p.jitters + JITTERS_MAX / 3);
+    // A scare, not a run-ender: it never pushes anyone past three quarters of the meter.
+    p.jitters = Math.max(p.jitters, Math.min(GIANT_JITTERS_CAP, p.jitters + GIANT_JITTERS));
   }
   for (const k of state.torches.keys()) state.torches.set(k, false);
   for (const k of state.glowcaps.keys()) state.glowcaps.set(k, 0);

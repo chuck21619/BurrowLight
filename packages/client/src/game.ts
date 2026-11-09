@@ -199,7 +199,7 @@ export class GameView {
   private mothView: { root: Container; wings: Graphics[] } | null = null;
   /** The Sleeping Giant: head position, stirring 0–100, awake. */
   private giant: { x: number; y: number; stir: number; awake: boolean } | null = null;
-  private giantView: { root: Container; face: Graphics; bar: Graphics; zzz: Text[] } | null = null;
+  private giantView: { root: Container; face: Graphics; bubble: Graphics; bar: Graphics; zzz: Text[] } | null = null;
   /** Has this player ever seen a pen door open (for the lock tip)? */
   private doorOpenedOnce = false;
   /** Ticks left in a boss intro (input is ignored and the camera watches the Gloom). */
@@ -423,23 +423,24 @@ export class GameView {
     if (stir > 0) bar.roundRect(-30, -62, (60 * stir) / 100, 7, 3).fill(stir > 66 ? 0xf08a7a : stir > 33 ? 0xf2cc8f : 0xa8d8a0);
   }
 
-  /** A huge sleepy face peeking up from the bottom of the head tiles, in a striped nightcap. */
-  private makeGiantView(x: number, y: number): { root: Container; face: Graphics; bar: Graphics; zzz: Text[] } {
+  /** A huge, mossy old mountain giant asleep against the wall: big nose, droopy ears, bushy brows and beard. */
+  private makeGiantView(x: number, y: number): { root: Container; face: Graphics; bubble: Graphics; bar: Graphics; zzz: Text[] } {
     const root = new Container();
     root.position.set((x + 1.5) * TILE, (y + 1) * TILE);
     const face = new Graphics();
+    const bubble = new Graphics();
     const bar = new Graphics();
     const zzz = [0, 1, 2].map((k) => {
-      const t = new Text({ text: 'z', style: { fontFamily: 'Trebuchet MS', fontSize: 16 + k * 5, fill: 0xe8dcff, fontWeight: 'bold' } });
+      const t = new Text({ text: 'z', style: { fontFamily: 'Trebuchet MS', fontSize: 16 + k * 5, fill: 0xd8e8d0, fontWeight: 'bold' } });
       t.anchor.set(0.5);
       root.addChild(t);
       return t;
     });
     root.addChildAt(face, 0);
-    root.addChild(bar);
+    root.addChild(bubble, bar);
     root.zIndex = 0.5;
     this.entityLayer.addChild(root);
-    return { root, face, bar, zzz };
+    return { root, face, bubble, bar, zzz };
   }
 
   private drawGiantFace(): void {
@@ -447,27 +448,39 @@ export class GameView {
     const v = this.giantView;
     if (!g || !v) return;
     const f = v.face;
-    const W = TILE * 1.6;
+    const skin = 0x8d9bab;
+    const shade = 0x75849a;
+    const hair = 0xece4d4;
+    const moss = 0x6f8f4e;
     f.clear();
-    f.ellipse(0, 6, W, TILE * 1.1).fill(0xe8b896); // big round face
-    f.ellipse(-W * 0.62, 18, 14, 9).fill({ color: 0xf08a7a, alpha: 0.6 }); // rosy cheeks
-    f.ellipse(W * 0.62, 18, 14, 9).fill({ color: 0xf08a7a, alpha: 0.6 });
-    f.moveTo(-W, -14).lineTo(0, -TILE * 1.25).lineTo(W, -14).closePath().fill(0x6a5acd); // nightcap
-    f.rect(-W, -18, W * 2, 10).fill(0xf4ead8);
-    if (g.awake) {
-      for (const ex of [-22, 22]) {
-        f.circle(ex, 4, 11).fill(0xffffff);
-        f.circle(ex, 6, 5).fill(0x2a2030);
-      }
-      f.ellipse(0, 34, 14, 10).fill(0x5a2a2a); // "WHO'S THERE?"
-    } else {
-      const twitch = g.stir > 66 ? 4 : g.stir > 33 ? 2 : 0; // eyebrows scrunch as he stirs
-      for (const ex of [-22, 22]) {
-        f.moveTo(ex - 11, 4).quadraticCurveTo(ex, 12, ex + 11, 4).stroke({ color: 0x5a3a2a, width: 3 });
-        f.moveTo(ex - 10, -8 + twitch).lineTo(ex + 10, -8 - twitch * Math.sign(ex)).stroke({ color: 0x5a3a2a, width: 3 });
-      }
-      f.ellipse(0, 30, 7, 5).fill(0x8a4a3a); // snoring mouth
+    // Long droopy ears.
+    for (const side of [-1, 1]) {
+      f.moveTo(side * 52, -6).lineTo(side * 86, 14).lineTo(side * 50, 22).closePath().fill(skin);
+      f.moveTo(side * 56, 2).lineTo(side * 76, 13).lineTo(side * 54, 16).closePath().fill(0xb48a96);
     }
+    // A broad, craggy head with moss growing on top.
+    f.roundRect(-56, -40, 112, 82, 34).fill(skin);
+    f.roundRect(-56, 10, 112, 32, 20).fill(shade);
+    for (const [mx, my, r] of [[-34, -38, 12], [-12, -44, 14], [14, -42, 12], [36, -36, 10]] as const) f.circle(mx, my, r).fill(moss);
+    f.circle(-4, -46, 4).fill(0xe8d06a); // a tiny flower in the moss
+    // Bushy brows that scrunch as he stirs; eyes closed (or open, if he's awake).
+    const twitch = g.awake ? -6 : g.stir > 66 ? 5 : g.stir > 33 ? 2 : 0;
+    for (const side of [-1, 1]) {
+      f.ellipse(side * 24, -16 + twitch, 17, 7).fill(hair);
+      if (g.awake) {
+        f.circle(side * 22, -2, 7).fill(0xffffff);
+        f.circle(side * 22, -1, 3.5).fill(0x2a2030);
+      } else {
+        f.moveTo(side * 22 - 9, -3).quadraticCurveTo(side * 22, 3, side * 22 + 9, -3).stroke({ color: 0x3a3440, width: 3 });
+      }
+    }
+    // A big beard, parted when he shouts.
+    for (const [bx, by, r] of [[-38, 30, 16], [-20, 40, 18], [0, 44, 19], [20, 40, 18], [38, 30, 16], [0, 26, 18]] as const)
+      f.circle(bx, by, r).fill(hair);
+    if (g.awake) f.ellipse(0, 30, 12, 9).fill(0x4a2a30);
+    // A huge potato nose over everything.
+    f.ellipse(0, 10, 15, 13).fill(shade);
+    f.ellipse(-4, 6, 5, 3).fill({ color: 0xffffff, alpha: 0.25 });
   }
 
   /** Zzz float up while he sleeps; he wobbles harder as he stirs. */
@@ -477,6 +490,13 @@ export class GameView {
     if (!g || !v) return;
     const shake = g.awake ? Math.sin(now / 30) * 3 : g.stir > 66 ? Math.sin(now / 60) * 1.5 : 0;
     v.face.position.set(shake, 0);
+    // A snore bubble from his nose, growing and popping with each snore.
+    const snore = (now / 2600) % 1;
+    v.bubble.clear();
+    if (!g.awake && snore < 0.85) {
+      const r = 3 + snore * 14;
+      v.bubble.circle(14 + shake + r * 0.6, 16 + r * 0.5, r).fill({ color: 0xcfe8ff, alpha: 0.45 }).stroke({ color: 0xffffff, width: 1.5, alpha: 0.7 });
+    }
     v.zzz.forEach((t, k) => {
       const phase = ((now / 1400 + k / 3) % 1 + 1) % 1;
       t.visible = !g.awake;
