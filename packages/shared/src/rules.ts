@@ -113,9 +113,6 @@ export const GIANT_STIR_MAX = 100;
 export const GIANT_SETTLE = 1;
 /** Waking up, he blows out lights and the Great Heartstone keeps only this share of its charge. */
 export const GIANT_KEEPS = 2 / 3;
-/** His gust adds this much Jitters, but never takes anyone past GIANT_JITTERS_CAP (a scare, not a run-ender). */
-export const GIANT_JITTERS = 150;
-export const GIANT_JITTERS_CAP = 450;
 /** Ticks he stays awake (grumbling) before he dozes off again; no stirring meanwhile. */
 export const GIANT_AWAKE_TICKS = 30;
 

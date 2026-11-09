@@ -188,6 +188,8 @@ export class GameView {
   private floaters: { text: Text; born: number; owner: Avatar }[] = [];
   /** Speech bubbles over critters ("Ow!", "AAAH!"): at most one per critter. */
   private bubbles = new Map<Avatar, { root: Container; born: number; life: number }>();
+  /** Each critter's tile last frame, for footsteps. */
+  private lastTile = new Map<Avatar, number>();
   /** When each panicking critter last screamed. */
   private lastScream = new Map<Avatar, number>();
   private burrowRequested = false;
@@ -1352,6 +1354,18 @@ export class GameView {
     const now = performance.now();
     this.handleInput(now);
     if (this.lightDirty) this.refreshLight();
+    // Footsteps: yours, and softer ones for critters close by that you can see.
+    const meA = this.avatars.get(this.you);
+    for (const a of this.avatars.values()) {
+      const tile = a.ty * this.w + a.tx;
+      const was = this.lastTile.get(a);
+      this.lastTile.set(a, tile);
+      if (was === undefined || was === tile || a.dig > 0) continue;
+      const far = Math.abs(a.tx - (was % this.w)) + Math.abs(a.ty - Math.floor(was / this.w)) > 2; // tunnels, new floors
+      if (far) continue;
+      if (a === meA) sfx.step();
+      else if (meA && a.root.visible && Math.max(Math.abs(a.tx - meA.tx), Math.abs(a.ty - meA.ty)) <= 5) sfx.step(0.4);
+    }
 
     // Critters on the same tile stand side by side, sliding apart and back smoothly.
     const sharing = new Map<string, Avatar[]>();

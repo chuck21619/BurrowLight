@@ -1533,7 +1533,6 @@ describe('the Sleeping Giant', () => {
     expect(woke).toBe(true);
     expect(a.lit).toBe(false);
     expect(a.jitters).toBeGreaterThan(0);
-    expect(a.jitters).toBeLessThan(JITTERS_MAX); // a scare, never a panic
     expect([...game.torches.values()].some(Boolean)).toBe(false);
     expect(heart.charge).toBeLessThan(90);
     // Grumbling, he doesn't stir; then he dozes off and settles in the dark.

@@ -59,7 +59,14 @@ function noise(dur: number, freq: number, gainPeak = 0.15, delay = 0): void {
   src.start(t0);
 }
 
+let stepAlt = false;
+
 export const sfx = {
+  /** A soft pitter-patter: a tiny muffled tap, alternating feet. Quieter for other critters. */
+  step: (volume = 1) => {
+    stepAlt = !stepAlt;
+    noise(0.05, stepAlt ? 900 : 750, 0.05 * volume);
+  },
   lanternOn: () => tone(520, 0.12, { to: 780, gain: 0.08 }),
   lanternOff: () => tone(520, 0.12, { to: 300, gain: 0.06 }),
   mirror: () => tone(1200, 0.05, { type: 'triangle', gain: 0.06 }),
