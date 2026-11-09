@@ -298,11 +298,20 @@ export function step(state: GameState, opts: StepOptions = {}): void {
   const tile = mapTile(state.map);
 
   for (const p of order) {
-    // A finished dig uses up a burrow brace and opens a permanent tunnel.
+    // A finished dig uses up a burrow brace, opens a permanent tunnel, and the digger pops out the far end.
     if (p.digging && state.tick >= p.digging.until) {
       state.tunnels.push({ a: p.digging.a, b: p.digging.b, owner: p.id });
       p.braces = Math.max(0, p.braces - 1);
+      p.x = p.digging.b % state.map.w;
+      p.y = Math.floor(p.digging.b / state.map.w);
       p.digging = null;
+      if (state.traps.has(p.y * state.map.w + p.x)) {
+        p.koUntil = state.tick + KO_TICKS;
+        p.readyAt = p.koUntil;
+        p.lit = false;
+        clearQueue(p);
+        reveal(state, p.y * state.map.w + p.x);
+      }
     }
     if (p.panic && state.tick >= p.readyAt) {
       p.queue.push({ seq: p.lastAck, action: { kind: 'move', dir: panicStep(state, p) } });
@@ -320,6 +329,14 @@ export function step(state: GameState, opts: StepOptions = {}): void {
         cost = actionCost({ kind: 'move', dir }, p.speed);
       } else {
         cost = ActionCost.blockedMove;
+        // Bumping into something in the dark lets you feel what it is: reveal that tile to the party.
+        const bx = p.x + DIRS[action.dir][0];
+        const by = p.y + DIRS[action.dir][1];
+        const bi = by * state.map.w + bx;
+        if (bx >= 0 && by >= 0 && bx < state.map.w && by < state.map.h && !state.explored[bi]) {
+          state.explored[bi] = 1;
+          state.newlyExplored.push(bi);
+        }
       }
     } else if (action.kind === 'dig') {
       const plan = p.braces > 0 ? planTunnel(state, p.x, p.y, action.dir) : null;

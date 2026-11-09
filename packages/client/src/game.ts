@@ -208,8 +208,8 @@ export class GameView {
   private floor = 1;
   private everLit = false;
   private gateSeen = false;
-  /** Has this player been through a tunnel yet (for the floor-2 tip)? */
-  private everBurrowed = false;
+  /** Has this player used Q on a tunnel yet (for the floor-2 tip)? */
+  private usedTunnelKey = false;
   private lastTip: string | null | undefined = undefined;
   onDebug: (text: string) => void = () => {};
 
@@ -546,8 +546,6 @@ export class GameView {
         a.label.text = a.panic ? `${a.info.name} !!` : a.info.name;
       }
       if (id === this.you) {
-        // A jump of more than one tile is a trip through a tunnel.
-        if (!snap && Math.max(Math.abs(x - this.serverX), Math.abs(y - this.serverY)) > 1) this.everBurrowed = true;
         this.serverX = x;
         this.serverY = y;
         if (snap || performance.now() - this.litToggledAt > LANTERN_PREDICT_MS) this.myLit = a.lit;
@@ -737,6 +735,8 @@ export class GameView {
     } else if (this.burrowRequested) {
       this.burrowRequested = false;
       action = { kind: 'burrow' };
+      const here = me.ty * this.w + me.tx;
+      if ([...this.tunnels.values()].some((t) => t.a === here || t.b === here)) this.usedTunnelKey = true;
     } else if (this.waitRequested) {
       this.waitRequested = false;
       action = { kind: 'wait' };
@@ -1171,7 +1171,8 @@ export class GameView {
       else tip = 'Find the Heartstone (look for its glow) and stand near it with your lantern lit. More light charges it faster.';
     } else if (this.floor === 2 && unfinished) {
       if (this.gateSeen && this.tunnels.size === 0) tip = 'That Heartstone is fenced in. Walk into the gate and hold to dig under it.';
-      else if (this.tunnels.size > 0 && !this.everBurrowed) tip = 'Stand on a tunnel hole and press Q to burrow through.';
+      else if (this.tunnels.size > 0 && !this.usedTunnelKey)
+        tip = 'You came out the other side! To go back through, stand on a tunnel hole and press Q.';
     }
     if (tip !== this.lastTip) {
       this.lastTip = tip;

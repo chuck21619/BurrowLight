@@ -932,12 +932,10 @@ describe('burrowing', () => {
     for (let i = 0; i < 3; i++) step(game);
     expect(game.tunnels).toEqual([{ a: plan.a, b: plan.b, owner: 'a' }]);
     expect(a.braces).toBe(BURROW_BRACES_PER_FLOOR - 1);
-    for (let i = 0; i < 3; i++) step(game);
-    queueIntent(game, 'a', 3, { kind: 'burrow' });
-    step(game);
+    // Finishing the dig takes you straight through to the far end.
     expect(a.y * game.map.w + a.x).toBe(plan.b);
     for (let i = 0; i < 3; i++) step(game);
-    queueIntent(game, 'a', 4, { kind: 'burrow' });
+    queueIntent(game, 'a', 3, { kind: 'burrow' });
     step(game);
     expect(a.y * game.map.w + a.x).toBe(plan.a);
   });
@@ -978,6 +976,16 @@ describe('burrowing', () => {
     const { game, a, dir, plan } = withSoil();
     game.tunnels.push({ a: plan.a, b: plan.b, owner: 'b' });
     expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
+  });
+
+  it('bumping into a wall in the dark reveals it to the party (so the dig prompt can work)', () => {
+    const { game, a, dir, plan } = withSoil();
+    const wall = plan.a + (DIRS[dir][1] * game.map.w + DIRS[dir][0]);
+    game.explored[wall] = 0;
+    queueIntent(game, 'a', 1, { kind: 'move', dir });
+    step(game);
+    expect(game.explored[wall]).toBe(1);
+    expect(game.newlyExplored).toContain(wall);
   });
 
   it("can't dig toward open floor, or come up in paved stone", () => {
