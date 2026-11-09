@@ -19,8 +19,9 @@ import { GEAR, gearDef, type GearId, type GearSlot, type Loadout } from '@burrow
 import { gearIcon } from './gearIcons';
 import { GameView } from './game';
 import { setSoundMuted, sfx } from './sound';
+import { music, themeForFloor } from './music';
 import { isTouchDevice, mountTouchControls, type TouchControls } from './touch';
-import { markTipSeen, muted, progress, recordFeats, setMuted, setTipsOn, setWearing, tipsOn, tipsSeen, unlocked, wearing } from './save';
+import { musicOn, setMusicOn, markTipSeen, muted, progress, recordFeats, setMuted, setTipsOn, setWearing, tipsOn, tipsSeen, unlocked, wearing } from './save';
 import { Net } from './net';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -279,10 +280,18 @@ tipsBox.addEventListener('change', () => {
   game.tipsSeen = new Set(tipsSeen());
 });
 setSoundMuted(muted());
+music.setEnabled(!muted() && musicOn());
+const musicBox = $<HTMLInputElement>('music-on');
+musicBox.checked = musicOn();
+musicBox.addEventListener('change', () => {
+  setMusicOn(musicBox.checked);
+  music.setEnabled(!muted() && musicBox.checked);
+});
 game.onMuteToggle = () => {
   const m = !muted();
   setMuted(m);
   setSoundMuted(m);
+  music.setEnabled(!m && musicOn());
   toast(m ? 'Sound off (M to turn it back on)' : 'Sound on');
 };
 
@@ -398,6 +407,7 @@ function renderBoard(entries: LeaderboardEntry[], rank: number | null, ranked: b
   );
   if (!entries.length) {
     const li = document.createElement('li');
+    li.className = 'empty';
     li.textContent = 'No winning runs yet. Be the first!';
     list.append(li);
   }
@@ -408,6 +418,7 @@ function renderBoard(entries: LeaderboardEntry[], rank: number | null, ranked: b
 game.onRunEnd = (s: RunSummary) => {
   if (runEnded) return;
   runEnded = true;
+  music.stop();
   $('runover-title').textContent = s.won ? 'The Hearthlight is restored!' : 'Eek!';
   $('runover-sub').textContent = s.won
     ? 'You beat all three acts and carried the light home. Well done, critters.'
@@ -598,6 +609,8 @@ net.onMessage = async (msg) => {
       }
       floorText = `Act ${actOf(msg.floor)}: ${actName(msg.floor)} · Floor ${msg.floor}${isBossFloor(msg.floor) ? ' (boss)' : ''} · Burrow ${msg.code}`;
       game.loadWelcome(msg);
+      if (msg.summary) music.stop();
+      else music.play(themeForFloor(msg.floor));
       break;
     case 'tick':
       game.applyTick(msg);

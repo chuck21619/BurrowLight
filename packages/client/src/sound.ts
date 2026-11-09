@@ -10,8 +10,8 @@ export function setSoundMuted(m: boolean): void {
   isMuted = m;
 }
 
-function audio(): AudioContext | null {
-  if (isMuted) return null;
+/** The shared audio context (created on first use). Null if audio isn't available. */
+export function audioContext(): AudioContext | null {
   try {
     ctx ??= new AudioContext();
     if (ctx.state === 'suspended') void ctx.resume();
@@ -19,6 +19,19 @@ function audio(): AudioContext | null {
   } catch {
     return null;
   }
+}
+
+function audio(): AudioContext | null {
+  return isMuted ? null : audioContext();
+}
+
+// Browsers only start audio after the player touches or presses something: wake it on any input.
+if (typeof window !== 'undefined') {
+  const wake = () => {
+    if (ctx && ctx.state === 'suspended') void ctx.resume();
+  };
+  window.addEventListener('pointerdown', wake);
+  window.addEventListener('keydown', wake);
 }
 
 /** One note: a frequency glide with a quick attack and a soft fade. */

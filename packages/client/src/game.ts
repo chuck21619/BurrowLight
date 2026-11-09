@@ -74,6 +74,10 @@ interface Avatar {
   /** Ticks left digging (0 = not digging). */
   dig: number;
   digBar: Graphics;
+  /** How long the current daze started at (ticks), for its progress bar. */
+  koMax: number;
+  /** "Dazed!" over a critter caught in a trap. */
+  dazedText: Text;
   /** Burrow braces left on this floor. */
   braces: number;
   /** 0–100 */
@@ -911,6 +915,7 @@ export class GameView {
       }
       a.lit = lit === 1;
       a.oil = oil;
+      if (ko > a.koMax || a.ko === 0) a.koMax = ko;
       a.ko = ko;
       a.stars.visible = ko > 0;
       a.jitters = jitters;
@@ -1351,7 +1356,14 @@ export class GameView {
     label.anchor.set(0.5, 1);
     label.position.set(0, -TILE * 0.5);
     const gearGfx = new Graphics();
-    root.addChild(shadow, body, gearGfx, outline, lamp, stars, digBar, label);
+    const dazedText = new Text({
+      text: 'Dazed!',
+      style: { fontFamily: 'Trebuchet MS, sans-serif', fontSize: 12, fontWeight: 'bold', fill: 0xffe066, stroke: { color: 0x0b0a10, width: 3 } },
+    });
+    dazedText.anchor.set(0.5, 1);
+    dazedText.position.set(0, -TILE * 0.5 - 24);
+    dazedText.visible = false;
+    root.addChild(shadow, body, gearGfx, outline, lamp, stars, digBar, dazedText, label);
     this.entityLayer.addChild(root);
     this.avatars.set(info.id, {
       info,
@@ -1366,6 +1378,8 @@ export class GameView {
       ko: 0,
       dig: 0,
       digBar,
+      koMax: 0,
+      dazedText,
       braces: 0,
       jitters: 0,
       panic: false,
@@ -1441,7 +1455,15 @@ export class GameView {
       this.applyDarkness(a);
       // Digging: a little progress bar above the critter, and a busy wiggle.
       a.digBar.clear();
-      if (a.dig > 0 && a.root.visible) {
+      a.dazedText.visible = a.ko > 0 && a.root.visible;
+      a.digBar.position.y = a.ko > 0 ? -TILE * 0.5 - 30 : -TILE * 0.5 - 22; // above the name, which lifts for the stars
+      a.dazedText.position.y = -TILE * 0.5 - 32;
+      if (a.ko > 0 && a.root.visible && a.koMax > 0) {
+        // Caught in a trap: a bar shows how long until you can move again.
+        const f = a.ko / a.koMax;
+        a.digBar.roundRect(-20, 0, 40, 6, 3).fill({ color: 0x0b0a10, alpha: 0.85 });
+        a.digBar.roundRect(-19, 1, 38 * f, 4, 2).fill(0xffe066);
+      } else if (a.dig > 0 && a.root.visible) {
         const f = 1 - a.dig / 30;
         a.digBar.roundRect(-16, 0, 32, 5, 2).fill({ color: 0x0b0a10, alpha: 0.8 });
         a.digBar.roundRect(-15, 1, 30 * f, 3, 1.5).fill(0xc9a07a);
@@ -1475,7 +1497,7 @@ export class GameView {
       }
       const pop = Math.min(1, age * 8);
       b.root.scale.set(pop * (1 + 0.04 * Math.sin(now / 90)));
-      b.root.position.set(a.root.x, a.root.y - TILE * 1.05 - (a.ko > 0 ? 10 : 0));
+      b.root.position.set(a.root.x, a.root.y - TILE * 1.05 - (a.ko > 0 ? 30 : 0));
       b.root.visible = a.root.visible;
       b.root.alpha = age > 0.8 ? (1 - age) * 5 : 1;
     }

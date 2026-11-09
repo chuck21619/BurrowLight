@@ -9,6 +9,7 @@ interface Save {
   tipsSeen: string[];
   tipsOn: boolean;
   muted: boolean;
+  musicOn: boolean;
 }
 
 const KEY = 'burrowlight.save.v1';
@@ -23,9 +24,10 @@ function load(): Save {
       tipsSeen: Array.isArray(raw.tipsSeen) ? raw.tipsSeen.filter((t) => typeof t === 'string') : [],
       tipsOn: raw.tipsOn !== false,
       muted: raw.muted === true,
+      musicOn: raw.musicOn !== false,
     };
   } catch {
-    return { counts: {}, unlocked: [], wearing: {}, tipsSeen: [], tipsOn: true, muted: false };
+    return { counts: {}, unlocked: [], wearing: {}, tipsSeen: [], tipsOn: true, muted: false, musicOn: true };
   }
 }
 
@@ -84,5 +86,13 @@ export function setTipsOn(on: boolean): void {
 export function setMuted(m: boolean): void {
   save = load();
   save.muted = m;
+  persist();
+}
+
+export const musicOn = (): boolean => save.musicOn;
+
+export function setMusicOn(on: boolean): void {
+  save = load();
+  save.musicOn = on;
   persist();
 }

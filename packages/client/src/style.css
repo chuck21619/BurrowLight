@@ -876,3 +876,9 @@ body.touch #help {
   top: 12px;
   top: max(12px, env(safe-area-inset-top));
 }
+
+#runover-board-list li.empty {
+  display: block;
+  text-align: center;
+  color: var(--muted);
+}
