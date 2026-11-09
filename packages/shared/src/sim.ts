@@ -457,6 +457,7 @@ function enterFloor(state: GameState, n: number): void {
     p.koUntil = 0;
     p.readyAt = state.tick;
   });
+  for (const p of order) feelAround(state, p.x, p.y);
   updateLight(state);
 }
 
@@ -584,6 +585,10 @@ export function step(state: GameState, opts: StepOptions = {}): void {
       reveal(state, here);
     }
   }
+
+  // Critters feel their way in the dark: the tiles right around each one are always known, so the
+  // game never lets you walk "into" a wall you haven't seen and then pulls you back out.
+  for (const p of order) feelAround(state, p.x, p.y);
 
   // Carrying a flame over a torch lights it; over a glowcap, lights it (again) for a while.
   for (const p of order) {
@@ -1134,6 +1139,20 @@ function updateLight(state: GameState): void {
     for (const t of state.traps)
       if (Math.max(Math.abs((t % map.w) - p.x), Math.abs(Math.floor(t / map.w) - p.y)) <= TRAP_SENSE_RADIUS) reveal(state, t);
   }
+}
+
+function feelAround(state: GameState, x: number, y: number): void {
+  const { w, h } = state.map;
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const i = ny * w + nx;
+      if (state.explored[i]) continue;
+      state.explored[i] = 1;
+      state.newlyExplored.push(i);
+    }
 }
 
 function reveal(state: GameState, i: number): void {

@@ -931,7 +931,7 @@ export class GameView {
     let y = this.serverY;
     for (const { action } of this.pending) {
       if (action.kind !== 'move') continue;
-      const dir = resolveMove(this.moveTile, x, y, action.dir, alliesNeverBlock);
+      const dir = resolveMove(this.knownWalkTile, x, y, action.dir, alliesNeverBlock);
       if (dir) {
         x += DIRS[dir][0];
         y += DIRS[dir][1];
@@ -1144,8 +1144,12 @@ export class GameView {
         return;
       }
       this.pushSoilSince = 0;
-      me.tx += DIRS[actual][0];
-      me.ty += DIRS[actual][1];
+      // Step ahead of the server only onto tiles we know; into the unknown, wait for its answer
+      // (so you never walk "into" a wall and get pulled back out).
+      if (resolveMove(this.knownWalkTile, me.tx, me.ty, dir, alliesNeverBlock) === actual) {
+        me.tx += DIRS[actual][0];
+        me.ty += DIRS[actual][1];
+      }
       // Send what was pressed; the server slides it the same way, using the same shared rule.
       action = { kind: 'move', dir };
       costOf = { kind: 'move', dir: actual };
@@ -1176,6 +1180,9 @@ export class GameView {
     const t = this.tiles[y * this.w + x]!;
     return t === UNKNOWN ? Tile.Floor : t;
   };
+
+  /** For predicting your own steps: only tiles you've actually seen or felt. */
+  private knownWalkTile = (x: number, y: number): number => this.knownTile(x, y);
 
   // ---------- Light ----------
 

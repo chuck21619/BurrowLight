@@ -1014,6 +1014,16 @@ describe('burrowing', () => {
     expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
   });
 
+  it('critters feel the tiles right around them, even in the dark', () => {
+    const game = createGame(11, [{ id: 'a', name: 'A', color: 1 }]);
+    game.map.sunshafts = [];
+    const a = game.players.get('a')!;
+    a.lit = false;
+    step(game);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) expect(game.explored[(a.y + dy) * game.map.w + a.x + dx]).toBe(1);
+  });
+
   it('bumping into a wall in the dark reveals it to the party (so the dig prompt can work)', () => {
     const { game, a, dir, plan } = withSoil();
     const wall = plan.a + (DIRS[dir][1] * game.map.w + DIRS[dir][0]);
