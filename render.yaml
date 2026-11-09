@@ -1,0 +1,16 @@
+# Render blueprint: one free web service that serves the game page and its WebSocket.
+# In Render: New > Blueprint, pick this repository, and it reads this file.
+services:
+  - type: web
+    name: burrowlight
+    runtime: node
+    plan: free
+    # Dev dependencies (Vite, TypeScript) are needed to build the client.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "24"

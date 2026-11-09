@@ -1,7 +1,8 @@
 import { startServer } from './server';
 
-// GAME_PORT, not PORT: dev tools often set PORT for the web client, and the two must differ.
-const port = Number(process.env.GAME_PORT ?? 8787);
+// In production (e.g. Render) the host tells us the port in PORT. In development we use GAME_PORT,
+// not PORT: dev tools often set PORT for the web client, and the two must differ.
+const port = Number(process.env.NODE_ENV === 'production' ? (process.env.PORT ?? 8787) : (process.env.GAME_PORT ?? 8787));
 const server = await startServer(port);
 console.log(`Burrowlight server listening on http://localhost:${server.port} (WebSocket at /ws)`);
 
