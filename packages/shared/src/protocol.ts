@@ -2,6 +2,7 @@ import type { Action } from './rules';
 import type { RunSummary } from './sim';
 import type { TalentId } from './talents';
 import type { Feat, Loadout } from './gear';
+import type { LeaderboardEntry } from './leaderboard';
 import type { MirrorOrient } from './beam';
 
 // ---- Client -> server ----
@@ -60,6 +61,8 @@ export type PlayerPos = [
 
 export type ServerMessage =
   | { t: 'error'; message: string }
+  /** End of a run: the fastest winning runs, and where yours placed (null if it didn't, or didn't count). */
+  | { t: 'leaderboard'; entries: LeaderboardEntry[]; rank: number | null; ranked: boolean }
   /** The answer to `checkDig`: `reason` explains a no. */
   | { t: 'digCheck'; dir: 'n' | 's' | 'e' | 'w'; ok: boolean; reason: string }
   | { t: 'lobby'; code: string; you: string; token: string; hostId: string; players: LobbyPlayer[] }
@@ -70,6 +73,8 @@ export type ServerMessage =
       token: string;
       tick: number;
       tickMs: number;
+      /** Tick the run started on (for the speedrun clock). */
+      runStartTick: number;
       floor: number;
       w: number;
       h: number;

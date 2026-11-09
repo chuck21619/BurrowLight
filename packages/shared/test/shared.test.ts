@@ -65,6 +65,8 @@ import {
   LANTERN_BELT_OIL,
   traceBeams,
   cleanLoadout,
+  placeRun,
+  formatRunTime,
 } from '../src/index';
 
 describe('rng', () => {
@@ -1629,6 +1631,22 @@ describe('gear and achievements', () => {
     step(game);
     expect(a.vest).toBe(1);
     expect(lit().has(at(3, wentUp ? 3 : 1))).toBe(true);
+  });
+});
+
+describe('speedrun leaderboard', () => {
+  const run = (seconds: number) => ({ seconds, names: ['A'], date: '2026-11-09' });
+  it('keeps the 10 fastest, sorted, and says where a run placed', () => {
+    let board = [run(500), run(300), run(900)];
+    const first = placeRun(board, run(400));
+    expect(first.rank).toBe(2);
+    expect(first.board.map((e) => e.seconds)).toEqual([300, 400, 500, 900]);
+    board = Array.from({ length: 10 }, (_, k) => run(100 + k));
+    expect(placeRun(board, run(5000)).rank).toBeNull();
+    expect(placeRun(board, run(5000)).board.length).toBe(10);
+    expect(placeRun(board, run(50)).rank).toBe(1);
+    expect(placeRun([{ junk: true } as never], run(10)).board.length).toBe(1);
+    expect(formatRunTime(725)).toBe('12:05');
   });
 });
 

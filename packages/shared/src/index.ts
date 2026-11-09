@@ -8,3 +8,4 @@ export * from './light';
 export * from './beam';
 export * from './talents';
 export * from './gear';
+export * from './leaderboard';

@@ -466,7 +466,7 @@ button.primary {
 #debug {
   position: absolute;
   right: 12px;
-  top: 12px;
+  top: 52px;
   color: var(--muted);
   font-family: ui-monospace, monospace;
   font-size: 12px;
@@ -559,10 +559,6 @@ kbd {
   font-size: 13px;
 }
 
-#gear-text {
-  font-size: 13px;
-  text-align: left;
-}
 
 #gear-locked {
   color: var(--muted);
@@ -597,4 +593,78 @@ label.check {
   align-items: center;
   gap: 8px;
   font-size: 13px;
+}
+
+#gear-tip {
+  position: fixed;
+  z-index: 30;
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff8ec;
+  color: #2a2030;
+  font-size: 13px;
+  line-height: 1.35;
+  box-shadow: 0 4px 0 #140f1f;
+  pointer-events: none;
+}
+
+#timer {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(43, 34, 56, 0.85);
+  border: 2px solid var(--panel-edge);
+  border-radius: 10px;
+  padding: 4px 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 15px;
+  color: var(--accent);
+}
+
+#timer:empty {
+  display: none;
+}
+
+#runover-board h2 {
+  margin: 6px 0 4px;
+  font-size: 16px;
+  color: var(--accent);
+  text-align: center;
+}
+
+#runover-board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+}
+
+#runover-board-list li {
+  display: grid;
+  grid-template-columns: 2em 1fr auto;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #1f1a29;
+}
+
+#runover-board-list li.you {
+  background: #5a4a2a;
+  color: #fff4e0;
+  font-weight: bold;
+}
+
+#runover-board-list li span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#runover .panel {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }

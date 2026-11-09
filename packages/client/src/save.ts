@@ -48,6 +48,7 @@ export const wearing = (): Loadout => {
 export const progress = (g: GearDef): number => Math.min(g.needs, save.counts[g.feat] ?? 0);
 
 export function setWearing(w: Loadout): void {
+  save = load(); // never write back stale data from memory
   save.wearing = cleanLoadout(w);
   persist();
 }

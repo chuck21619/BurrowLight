@@ -34,6 +34,7 @@ import {
   type PlayerPos,
   type ServerMessage,
 } from '@burrowlight/shared';
+import { memoryLeaderboard, type LeaderboardStore } from './leaderboard';
 
 /** Anything with send/close: a real WebSocket, or a fake in tests. */
 export interface Peer {
@@ -72,7 +73,27 @@ export class Room {
     private readonly startFloor = 1,
     /** A fixed seed, for testing on a development server only. */
     private readonly devSeed: number | null = null,
+    private readonly leaderboard: LeaderboardStore = memoryLeaderboard(),
   ) {}
+
+  /** Set once the end-of-run leaderboard has been sent. */
+  private boardSent = false;
+
+  /** At the end of a run: record a win (if it was a real run from floor 1) and show everyone the board. */
+  private sendLeaderboard(game: GameState): void {
+    this.boardSent = true;
+    const ranked = game.runWon && this.startFloor === 1 && this.devSeed === null;
+    const result = ranked
+      ? this.leaderboard.submit({
+          seconds: runSummary(game).seconds,
+          names: [...game.players.values()].map((p) => p.name),
+          date: new Date().toISOString().slice(0, 10),
+        })
+      : this.leaderboard.top().then((board) => ({ board, rank: null }));
+    void result.then(({ board, rank }) => {
+      for (const m of this.members.values()) if (m.peer) send(m.peer, { t: 'leaderboard', entries: board, rank, ranked });
+    });
+  }
 
   get connectedCount(): number {
     let n = 0;
@@ -191,6 +212,7 @@ export class Room {
       }
     }
     step(game, { isPresent: (id) => this.members.get(id)?.peer != null });
+    if ((game.runWon || game.runOver) && !this.boardSent) this.sendLeaderboard(game);
     if (game.descended) {
       // New floor: everyone gets a full snapshot.
       for (const m of this.members.values()) this.sendWelcome(m);
@@ -270,6 +292,7 @@ export class Room {
       token: m.token,
       tick: game.tick,
       tickMs: TICK_MS,
+      runStartTick: game.stats.startTick,
       floor: game.floor,
       w: game.map.w,
       h: game.map.h,

@@ -7,6 +7,8 @@ import {
   isBossFloor,
   learnProblem,
   normalizeCode,
+  formatRunTime,
+  type LeaderboardEntry,
   talentDef,
   type LobbyPlayer,
   type RunSummary,
@@ -184,11 +186,18 @@ function renderGear() {
   const current = wearing();
   const slots = $('gear-slots');
   slots.replaceChildren();
-  const text = $('gear-text');
-  const showWorn = () => {
-    const worn = Object.values(current).map((id) => gearDef(id!)!);
-    text.textContent = worn.length ? worn.map((g) => `${g.name}: ${g.text}`).join(' ') : 'No gear on. Pick from what you\'ve unlocked.';
+  const tip = $('gear-tip');
+  const showTip = (btn: HTMLElement, textValue: string) => {
+    tip.textContent = textValue;
+    tip.hidden = false;
+    const panel = btn.closest('.panel')!.getBoundingClientRect();
+    const r = btn.getBoundingClientRect();
+    const w = tip.offsetWidth;
+    const left = Math.min(Math.max(r.left + r.width / 2 - w / 2, panel.left + 8), panel.right - w - 8);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${r.top - tip.offsetHeight - 8}px`;
   };
+  const hideTip = () => (tip.hidden = true);
   for (const slot of ['head', 'shirt', 'pants'] as GearSlot[]) {
     const label = document.createElement('span');
     label.className = 'gear-slot-name';
@@ -207,7 +216,6 @@ function renderGear() {
       btn.setAttribute('role', 'radio');
       btn.setAttribute('aria-checked', String((current[slot] ?? undefined) === id));
       btn.setAttribute('aria-label', def ? `${def.name}${locked ? ' (locked)' : ''}` : 'Nothing');
-      btn.title = gearDescription(id, slot);
       const img = document.createElement('img');
       img.src = gearIcon((id as GearId | undefined) ?? 'none');
       img.alt = '';
@@ -218,12 +226,13 @@ function renderGear() {
         lock.textContent = '🔒';
         btn.append(lock);
       }
-      btn.addEventListener('mouseenter', () => (text.textContent = gearDescription(id, slot)));
-      btn.addEventListener('focus', () => (text.textContent = gearDescription(id, slot)));
-      btn.addEventListener('mouseleave', showWorn);
+      btn.addEventListener('mouseenter', () => showTip(btn, gearDescription(id, slot)));
+      btn.addEventListener('focus', () => showTip(btn, gearDescription(id, slot)));
+      btn.addEventListener('mouseleave', hideTip);
+      btn.addEventListener('blur', hideTip);
       btn.addEventListener('click', () => {
         if (locked) {
-          text.textContent = gearDescription(id, slot);
+          showTip(btn, gearDescription(id, slot)); // a tap on a phone shows how to unlock it
           return;
         }
         const next: Loadout = { ...wearing() };
@@ -237,7 +246,7 @@ function renderGear() {
     }
     slots.append(label, row);
   }
-  showWorn();
+  hideTip();
   const locked = GEAR.filter((g) => !unlocked(g.id));
   $('gear-locked').hidden = locked.length === 0;
   $('gear-unlocks').replaceChildren(
@@ -366,6 +375,33 @@ game.onTip = (tip) => {
 };
 
 let runEnded = false;
+function renderBoard(entries: LeaderboardEntry[], rank: number | null, ranked: boolean) {
+  const box = $('runover-board');
+  box.hidden = false;
+  const list = $('runover-board-list');
+  list.replaceChildren(
+    ...entries.map((e, k) => {
+      const li = document.createElement('li');
+      if (rank === k + 1) li.className = 'you';
+      const place = document.createElement('span');
+      place.textContent = `${k + 1}.`;
+      const who = document.createElement('span');
+      who.textContent = e.names.join(', ');
+      const time = document.createElement('span');
+      time.textContent = formatRunTime(e.seconds);
+      li.append(place, who, time);
+      return li;
+    }),
+  );
+  if (!entries.length) {
+    const li = document.createElement('li');
+    li.textContent = 'No winning runs yet. Be the first!';
+    list.append(li);
+  }
+  $('runover-board-note').textContent =
+    rank !== null ? `Your run placed #${rank}!` : ranked ? 'Not fast enough for the top 10 this time.' : '';
+}
+
 game.onRunEnd = (s: RunSummary) => {
   if (runEnded) return;
   runEnded = true;
@@ -494,6 +530,11 @@ game.onObjective = ({ charged, total, open, gloom, pinned, intro, moth, mothOnSt
       : `Light the Heartstone${total > 1 ? 's' : ''} (${charged}/${total}): more light charges it faster`;
   $('banner').replaceChildren(document.createTextNode(floorText), document.createElement('br'), Object.assign(document.createElement('small'), { textContent: goal }));
 };
+game.onClock = (s) => {
+  const el = $('timer');
+  const t = formatRunTime(s);
+  if (el.textContent !== t) el.textContent = t;
+};
 const debugEl = $('debug');
 // The tick / fps readout is for development only.
 if (import.meta.env.DEV) game.onDebug = (t) => (debugEl.textContent = t);
@@ -550,6 +591,9 @@ net.onMessage = async (msg) => {
       break;
     case 'tick':
       game.applyTick(msg);
+      break;
+    case 'leaderboard':
+      renderBoard(msg.entries, msg.rank, msg.ranked);
       break;
     case 'digCheck':
       game.digCheck(msg);

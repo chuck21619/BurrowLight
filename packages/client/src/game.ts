@@ -253,6 +253,10 @@ export class GameView {
   onPartyChange: (players: PartyMember[]) => void = () => {};
   onObjective: (o: Objective) => void = () => {};
   onRunEnd: (summary: RunSummary) => void = () => {};
+  /** The speedrun clock, in whole seconds of game time. */
+  onClock: (seconds: number) => void = () => {};
+  private runStartTick = 0;
+  private clockStopped = false;
   /** A short how-to-play hint for the first floors, or null. */
   onTip: (tip: string | null) => void = () => {};
   private floor = 1;
@@ -288,6 +292,8 @@ export class GameView {
     this.gateSeen = false;
     this.tickMs = msg.tickMs;
     this.serverTick = msg.tick;
+    this.runStartTick = msg.runStartTick;
+    this.clockStopped = Boolean(msg.summary);
     this.w = msg.w;
     this.h = msg.h;
     this.tiles = new Int8Array(this.w * this.h).fill(UNKNOWN);
@@ -395,6 +401,8 @@ export class GameView {
     this.applyPositions(msg.pos, msg.ack, false);
     this.lightDirty = true;
     this.emitObjective();
+    if (msg.summary) this.clockStopped = true;
+    else this.onClock(Math.floor(((msg.tick - this.runStartTick) * this.tickMs) / 1000));
     if (msg.summary) this.onRunEnd(msg.summary);
   }
 

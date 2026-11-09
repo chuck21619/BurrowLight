@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { isAction, isCardinal, isTalentId, normalizeCode, sanitizeName, type ClientMessage } from '@burrowlight/shared';
 import { EMPTY_ROOM_TTL_MS, Room, makeRoomCode, send } from './room';
+import { leaderboardFromEnv, type LeaderboardStore } from './leaderboard';
 
 const MAX_MESSAGES_PER_SECOND = 20;
 const KICK_MESSAGES_PER_SECOND = 60;
@@ -26,7 +27,7 @@ export interface RunningServer {
   close(): Promise<void>;
 }
 
-export function startServer(port: number): Promise<RunningServer> {
+export function startServer(port: number, leaderboard: LeaderboardStore = leaderboardFromEnv()): Promise<RunningServer> {
   const rooms = new Map<string, Room>();
   const http = createServer((req, res) => serveStatic(req.url ?? '/', res));
   const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 4096 });
@@ -64,7 +65,7 @@ export function startServer(port: number): Promise<RunningServer> {
           const code = makeRoomCode((c) => rooms.has(c));
           const devFloor = process.env.NODE_ENV !== 'production' && Number.isInteger(msg.startFloor) ? msg.startFloor! : 1;
           const devSeed = process.env.NODE_ENV !== 'production' && Number.isInteger(msg.seed) && msg.seed! > 0 ? msg.seed! : null;
-          const r = new Room(code, Math.min(9, Math.max(1, devFloor)), devSeed);
+          const r = new Room(code, Math.min(9, Math.max(1, devFloor)), devSeed, leaderboard);
           rooms.set(code, r);
           const m = r.addMember(peer, sanitizeName(msg.name));
           if (typeof m === 'string') return fail(m);
