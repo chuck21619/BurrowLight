@@ -43,6 +43,8 @@ const SHARE_SPREAD_PX = 20;
 const SEE_FRIEND_IN_DARK = 2;
 /** Hold a direction into soft soil this long to start digging. */
 const PUSH_TO_DIG_MS = 350;
+/** How long the "Dig here?" question waits for an answer. */
+const DIG_PROMPT_MS = 5000;
 /** Every critter's outline in the dark is the same dark purple, not its own color. */
 const DARK_OUTLINE = 0x7a5cb8;
 const LABEL_STACK_PX = 15;
@@ -162,6 +164,9 @@ export class GameView {
   private pushHandled = false;
   /** A dig request waiting for the server's answer. */
   private digSeq = 0;
+  /** A dig waiting for the player to confirm (it spends a burrow brace). */
+  private digPrompt: { dir: 'n' | 's' | 'e' | 'w'; at: number; since: number; text: Text } | null = null;
+  private confirmRequested = false;
   /** Little floating messages above critters ("Can't dig here"). */
   private floaters: { text: Text; born: number; owner: Avatar }[] = [];
   private burrowRequested = false;
@@ -593,6 +598,14 @@ export class GameView {
       if (!e.repeat) this.burrowRequested = true;
       return;
     }
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      if (!e.repeat) this.confirmRequested = true;
+      return;
+    }
+    if (e.code === 'Escape') {
+      this.clearDigPrompt();
+      return;
+    }
     if (e.code === 'Period' || e.code === 'NumpadDecimal' || e.code === 'Numpad5') {
       this.waitRequested = true;
       return;
@@ -622,6 +635,11 @@ export class GameView {
     const b = (me.ty + dy * n) * this.w + me.tx + dx * n;
     for (const t of this.tunnels.values()) if (t.a === a || t.b === a || t.a === b || t.b === b) return 'Already a tunnel here';
     return null;
+  }
+
+  private clearDigPrompt(): void {
+    this.digPrompt?.text.destroy();
+    this.digPrompt = null;
   }
 
   /** A short message that floats up from a critter and fades. */
@@ -672,6 +690,24 @@ export class GameView {
 
     let action: Action | null = null;
     let costOf: Action | null = null;
+    // A pending dig: Enter confirms; walking away (or waiting 5 s) cancels.
+    if (this.digPrompt) {
+      const here = me.ty * this.w + me.tx;
+      if (here !== this.digPrompt.at || now - this.digPrompt.since > DIG_PROMPT_MS) this.clearDigPrompt();
+    }
+    if (this.confirmRequested) {
+      this.confirmRequested = false;
+      if (this.digPrompt) {
+        action = { kind: 'dig', dir: this.digPrompt.dir };
+        this.clearDigPrompt();
+        const seq = ++this.seq;
+        this.digSeq = seq;
+        this.pending.push({ seq, action });
+        this.send({ t: 'intent', seq, action });
+        this.readyAt = now + actionCost(action) * this.tickMs;
+        return;
+      }
+    }
     if (this.rotateRequested) {
       this.rotateRequested = false;
       action = { kind: 'rotate' };
@@ -692,9 +728,20 @@ export class GameView {
       if (!actual) {
         // Pushing into soft soil for a moment starts digging a tunnel under it.
         const [ddx, ddy] = DIRS[dir];
-        const intoSoil = !isDiagonal(dir) && this.knownTile(me.tx + ddx, me.ty + ddy) === Tile.Soil && held === dir;
-        if (!intoSoil) {
+        const ahead = this.knownTile(me.tx + ddx, me.ty + ddy);
+        const pushing = !isDiagonal(dir) && held === dir && (ahead === Tile.Soil || ahead === Tile.Wall);
+        if (!pushing) {
           this.pushSoilSince = 0;
+          return;
+        }
+        if (ahead === Tile.Wall) {
+          // Stone: say so once per push, so walking into walls is never a mystery.
+          if (this.pushHandled) return;
+          if (!this.pushSoilSince) this.pushSoilSince = now;
+          if (now - this.pushSoilSince < PUSH_TO_DIG_MS) return;
+          this.pushSoilSince = 0;
+          this.pushHandled = true;
+          if (this.tiles[(me.ty + ddy) * this.w + me.tx + ddx] === Tile.Wall) this.say(me, 'Stone: too hard to dig');
           return;
         }
         if (this.pushHandled) return; // already answered this push; let go to try again
@@ -707,12 +754,16 @@ export class GameView {
           this.say(me, problem);
           return;
         }
-        action = { kind: 'dig', dir: dir as 'n' | 's' | 'e' | 'w' };
-        const seq = ++this.seq;
-        this.digSeq = seq;
-        this.pending.push({ seq, action });
-        this.send({ t: 'intent', seq, action });
-        this.readyAt = now + actionCost(action) * this.tickMs;
+        // Spending a brace is a big decision: ask first.
+        this.clearDigPrompt();
+        const text = new Text({
+          text: `Dig here? Uses ${me.braces === 1 ? 'your burrow brace' : '1 burrow brace'}. Press Enter`,
+          style: { fontFamily: 'Trebuchet MS, sans-serif', fontSize: 13, fill: 0xf2cc8f, stroke: { color: 0x0b0a10, width: 3 } },
+        });
+        text.anchor.set(0.5, 1);
+        text.zIndex = 9999;
+        this.entityLayer.addChild(text);
+        this.digPrompt = { dir: dir as 'n' | 's' | 'e' | 'w', at: me.ty * this.w + me.tx, since: now, text };
         return;
       }
       this.pushSoilSince = 0;
@@ -958,6 +1009,11 @@ export class GameView {
     }
 
     this.drawGloom(now, dtMs);
+
+    if (this.digPrompt) {
+      const mine = this.avatars.get(this.you);
+      if (mine) this.digPrompt.text.position.set(mine.root.x, mine.root.y - TILE * 0.85);
+    }
 
     // Floating messages rise and fade over 1.4 s.
     this.floaters = this.floaters.filter((f) => {

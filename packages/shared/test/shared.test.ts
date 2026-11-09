@@ -16,6 +16,7 @@ import {
   setLantern,
   MAX_OIL,
   planTunnel,
+  tileAt,
   DIG_TICKS,
   BURROW_BRACES_PER_FLOOR,
   inIntro,
@@ -866,16 +867,23 @@ describe('burrowing', () => {
     throw new Error('no soil found');
   };
 
-  it('generators add soil shortcuts: soil blocks movement and light, and never changes what is reachable', () => {
-    let floors = 0;
+  it('most walls are diggable dirt; the outer edge and a few outcrops are stone; reachability is unchanged', () => {
     for (let seed = 1; seed <= 60; seed++) {
-      const map = generateFloor(seed, 2, 1);
-      if (!map.tiles.includes(Tile.Soil)) continue;
-      floors++;
+      const map = generateFloor(seed, (seed % 4) + 1, 1);
+      let dirt = 0;
+      let stone = 0;
+      for (let y = 0; y < map.h; y++)
+        for (let x = 0; x < map.w; x++) {
+          const t = map.tiles[y * map.w + x]!;
+          const edge = x === 0 || y === 0 || x === map.w - 1 || y === map.h - 1;
+          if (edge) expect(t).toBe(Tile.Wall);
+          else if (t === Tile.Soil) dirt++;
+          else if (t === Tile.Wall) stone++;
+        }
+      if (dirt + stone > 0) expect(dirt, `seed ${seed}`).toBeGreaterThan(stone); // one-room floors may have no inner walls at all
       const dist = distanceMap(map.tiles, map.w, map.h, map.entrance);
       for (let i = 0; i < map.tiles.length; i++) if (isWalkable(map.tiles[i]!)) expect(dist[i]).toBeGreaterThanOrEqual(0);
     }
-    expect(floors).toBeGreaterThan(25); // about 60% of floor-2 maps; one-room floors have nothing to shortcut
     expect(isWalkable(Tile.Soil)).toBe(false);
     expect(beamCellOf(Tile.Soil)).toBe('wall');
   });
@@ -940,9 +948,15 @@ describe('burrowing', () => {
     expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
   });
 
-  it("can't dig where there's no soil", () => {
+  it("can't dig where there's no dirt (open floor, or stone)", () => {
     const game = createGame(1, [{ id: 'a', name: 'A', color: 1 }]);
+    const { map } = game;
     const a = game.players.get('a')!;
+    // Toward open floor: nothing to dig.
+    const open = (['n', 's', 'e', 'w'] as const).find((d) => isWalkable(tileAt(map, a.x + DIRS[d][0], a.y + DIRS[d][1])));
+    expect(planTunnel(game, a.x, a.y, open!)).toBeNull();
+    // Into stone: no.
+    map.tiles[(a.y - 1) * map.w + a.x] = Tile.Wall;
     expect(planTunnel(game, a.x, a.y, 'n')).toBeNull();
   });
 });

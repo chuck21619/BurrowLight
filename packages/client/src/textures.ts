@@ -50,15 +50,16 @@ export function makeTextures(renderer: Renderer): Textures {
     }),
   );
 
+  // Stone: cool grey bricks. Can't be dug.
   const wall = bake((g) => {
-    px(g, 0, 0, 0x3e2f2a, SRC, SRC);
-    px(g, 0, 0, 0x5c4436, SRC, 4); // top face catches the lantern light
-    px(g, 0, 8, 0x33261f, SRC, 1);
-    px(g, 0, 12, 0x33261f, SRC, 1);
-    px(g, 5, 4, 0x33261f, 1, 4);
-    px(g, 11, 8, 0x33261f, 1, 4);
-    px(g, 3, 12, 0x33261f, 1, 4);
-    px(g, 9, 5, 0x6f8a4a, 2, 1); // root / moss
+    px(g, 0, 0, 0x55586a, SRC, SRC);
+    px(g, 0, 0, 0x7a7e92, SRC, 4); // top face catches the lantern light
+    px(g, 0, 8, 0x3e4050, SRC, 1);
+    px(g, 0, 12, 0x3e4050, SRC, 1);
+    px(g, 5, 4, 0x3e4050, 1, 4);
+    px(g, 11, 8, 0x3e4050, 1, 4);
+    px(g, 3, 12, 0x3e4050, 1, 4);
+    px(g, 13, 5, 0x9296aa, 1, 1); // glint
   });
 
   const stairs = bake((g) => {
@@ -123,21 +124,24 @@ export function makeTextures(renderer: Renderer): Textures {
   };
   const mirror: [Texture, Texture] = [bake((g) => mirrorPane(g, false)), bake((g) => mirrorPane(g, true))];
 
-  // Soft soil: lumpy, lighter than the stone walls, so it reads as diggable.
+  // Dirt: warm packed earth with pebbles and roots, so it reads as diggable at a glance.
   const soil = bake((g) => {
-    px(g, 0, 0, 0x6b4a2e, SRC, SRC);
+    px(g, 0, 0, 0x5e3f27, SRC, SRC);
+    px(g, 0, 0, 0x80593a, SRC, 4); // top face
     for (const [x, y, c] of [
-      [2, 3, 0x7d5a3a],
-      [9, 2, 0x5a3d25],
-      [5, 8, 0x7d5a3a],
-      [12, 7, 0x5a3d25],
-      [3, 12, 0x5a3d25],
-      [10, 12, 0x7d5a3a],
-      [7, 5, 0x8a6a48],
-      [13, 13, 0x8a6a48],
+      [2, 6, 0x6f4c30],
+      [9, 7, 0x4c321e],
+      [5, 10, 0x6f4c30],
+      [12, 11, 0x4c321e],
+      [3, 13, 0x4c321e],
+      [10, 14, 0x6f4c30],
+      [7, 2, 0x9a7048],
+      [13, 1, 0x9a7048],
     ] as const)
       px(g, x, y, c, 2, 1);
-    px(g, 0, 0, 0x7d5a3a, SRC, 1);
+    px(g, 4, 8, 0x8fa860, 1, 3); // little roots
+    px(g, 5, 10, 0x8fa860, 2, 1);
+    px(g, 11, 5, 0x8fa860, 1, 2);
   });
 
   const hole = bake((g) => {

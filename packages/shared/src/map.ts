@@ -78,7 +78,10 @@ export function generateFloor(seed: number, floor = 1, heartCount = 1): FloorMap
   const rng = createRng(hashSeed(seed, floor, heartCount));
   for (let attempt = 0; attempt < 100; attempt++) {
     const map = tryGenerate(rng, roomCountFor(floor, rng));
-    if (map && placeFeatures(rng, map, heartCount)) return map;
+    if (map && placeFeatures(rng, map, heartCount)) {
+      earthenWalls(rng, map);
+      return map;
+    }
   }
   throw new Error(`could not generate floor for seed ${seed}`);
 }
@@ -286,8 +289,6 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
     used.add(t.y * w + t.x);
   }
 
-  placeSoilShortcuts(rng, map);
-
   // Hidden traps: never near the entrance, next to a Heartstone, or on special tiles.
   for (let i = 0; i < tiles.length; i++) {
     if (tiles[i] !== Tile.Floor || used.has(i)) continue;
@@ -301,47 +302,32 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
 
 /** Longest stretch of soil a tunnel can go under. */
 export const MAX_TUNNEL_SOIL = 3;
-/** A soil shortcut only counts if walking around would take at least this many steps. */
-const MIN_SHORTCUT_SAVING = 6;
-
 /**
- * Turn a few thin wall segments into soft soil where a tunnel would be a real shortcut: floor on both
- * sides, 1–3 tiles of wall between, and a long walk around. Soil never changes what's reachable.
+ * Most walls are packed dirt that critters can tunnel under. Only the floor's outer edge and a few
+ * stone outcrops are solid stone. (Dirt blocks movement and light just like stone.)
  */
-function placeSoilShortcuts(rng: Rng, map: FloorMap): void {
+function earthenWalls(rng: Rng, map: FloorMap): void {
   const { w, h, tiles } = map;
-  const candidates: number[][] = [];
-  for (let y = 1; y < h - 1; y++)
-    for (let x = 1; x < w - 1; x++) {
-      if (!isWalkable(tiles[y * w + x]!)) continue;
-      for (const [dx, dy] of [
-        [1, 0],
-        [0, 1],
-      ] as const) {
-        const wall: number[] = [];
-        let n = 1;
-        while (n <= MAX_TUNNEL_SOIL) {
-          const wx = x + dx * n;
-          const wy = y + dy * n;
-          if (wx <= 0 || wy <= 0 || wx >= w - 1 || wy >= h - 1 || tiles[wy * w + wx] !== Tile.Wall) break;
-          wall.push(wy * w + wx);
-          n++;
-        }
-        const bx = x + dx * n;
-        const by = y + dy * n;
-        if (!wall.length || bx >= w || by >= h || !isWalkable(tiles[by * w + bx]!)) continue;
-        const walk = distanceMap(tiles, w, h, { x, y })[by * w + bx]!;
-        if (walk >= MIN_SHORTCUT_SAVING) candidates.push(wall);
+  const border = (x: number, y: number) => x === 0 || y === 0 || x === w - 1 || y === h - 1;
+  const dirt: number[] = [];
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (tiles[i] === Tile.Wall && !border(x, y)) {
+        tiles[i] = Tile.Soil;
+        dirt.push(i);
       }
     }
-  const taken = new Set<number>();
-  for (let k = rng.int(1, 3); k > 0 && candidates.length; k--) {
-    const wall = candidates.splice(rng.int(0, candidates.length - 1), 1)[0]!;
-    if (wall.some((i) => taken.has(i) || taken.has(i - 1) || taken.has(i + 1) || taken.has(i - w) || taken.has(i + w))) continue;
-    for (const i of wall) {
-      tiles[i] = Tile.Soil;
-      taken.add(i);
-    }
+  // A few stone outcrops so not every wall can be dug through.
+  // More, and occasionally bigger, outcrops on bigger floors; small floors stay mostly dirt.
+  for (let k = rng.int(1, 1 + Math.floor(dirt.length / 80)); k > 0 && dirt.length; k--) {
+    const c = rng.pick(dirt);
+    const cx = c % w;
+    const cy = Math.floor(c / w);
+    const r = rng.chance(0.3) ? 2 : 1;
+    for (let y = cy - r; y <= cy + r; y++)
+      for (let x = cx - r; x <= cx + r; x++)
+        if (x >= 0 && y >= 0 && x < w && y < h && tiles[y * w + x] === Tile.Soil) tiles[y * w + x] = Tile.Wall;
   }
 }
 
