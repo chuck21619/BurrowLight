@@ -209,6 +209,12 @@ game.onPartyChange = (players) => {
   );
 };
 
+game.onTip = (tip) => {
+  const el = $('tip');
+  el.hidden = !tip;
+  el.textContent = tip ?? '';
+};
+
 game.onRunOver = () => {
   $('runover').hidden = false;
 };
@@ -265,6 +271,9 @@ net.onMessage = async (msg) => {
       break;
     case 'tick':
       game.applyTick(msg);
+      break;
+    case 'digCheck':
+      game.digCheck(msg);
       break;
   }
 };

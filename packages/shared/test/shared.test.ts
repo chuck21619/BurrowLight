@@ -16,6 +16,8 @@ import {
   setLantern,
   MAX_OIL,
   planTunnel,
+  digVerdict,
+  isDiggableGround,
   tileAt,
   DIG_TICKS,
   BURROW_BRACES_PER_FLOOR,
@@ -60,7 +62,7 @@ describe('map generation', () => {
   it('makes every walkable tile reachable and puts the stairs away from the start, across many seeds', () => {
     for (let seed = 1; seed <= 200; seed++) {
       const map = generateFloor(seed, (seed % 6) + 1);
-      const dist = distanceMap(map.tiles, map.w, map.h, map.entrance);
+      const dist = distanceMap(gatesOpen(map.tiles), map.w, map.h, map.entrance);
       for (let i = 0; i < map.tiles.length; i++) {
         if (isWalkable(map.tiles[i]!)) expect(dist[i], `seed ${seed} tile ${i}`).toBeGreaterThanOrEqual(0);
       }
@@ -74,6 +76,9 @@ describe('map generation', () => {
     }
   });
 });
+
+/** A copy of the tiles with gates treated as floor (the gated pen's inside is reached by tunnelling). */
+const gatesOpen = (tiles: Uint8Array) => tiles.map((t) => (t === Tile.Gate ? Tile.Floor : t));
 
 /** Build a tiny map from ASCII: # wall, . floor. */
 function asciiMap(rows: string[]): FloorMap {
@@ -236,10 +241,10 @@ describe('light prototype', () => {
           const x = t % map.w;
           const y = Math.floor(t / map.w);
           expect(Math.max(Math.abs(x - map.entrance.x), Math.abs(y - map.entrance.y))).toBeGreaterThan(2);
-          expect(map.tiles[t]).toBe(Tile.Floor);
+          expect([Tile.Floor, Tile.StoneFloor]).toContain(map.tiles[t]);
         }
         // Heartstones never cut anything off.
-        const dist = distanceMap(map.tiles, map.w, map.h, map.entrance);
+        const dist = distanceMap(gatesOpen(map.tiles), map.w, map.h, map.entrance);
         for (let i = 0; i < map.tiles.length; i++) if (isWalkable(map.tiles[i]!)) expect(dist[i]).toBeGreaterThanOrEqual(0);
       }
     }
@@ -841,7 +846,7 @@ describe('burrowing', () => {
       ]);
       const { map } = game;
       for (let i = 0; i < map.tiles.length; i++) {
-        if (map.tiles[i] !== Tile.Soil) continue;
+        if (map.tiles[i] !== Tile.Wall) continue;
         const x = i % map.w;
         const y = Math.floor(i / map.w);
         for (const [dir, dx, dy] of [
@@ -864,28 +869,55 @@ describe('burrowing', () => {
         }
       }
     }
-    throw new Error('no soil found');
+    throw new Error('no diggable wall found');
   };
 
-  it('most walls are diggable dirt; the outer edge and a few outcrops are stone; reachability is unchanged', () => {
-    for (let seed = 1; seed <= 60; seed++) {
-      const map = generateFloor(seed, (seed % 4) + 1, 1);
-      let dirt = 0;
-      let stone = 0;
-      for (let y = 0; y < map.h; y++)
-        for (let x = 0; x < map.w; x++) {
-          const t = map.tiles[y * map.w + x]!;
-          const edge = x === 0 || y === 0 || x === map.w - 1 || y === map.h - 1;
-          if (edge) expect(t).toBe(Tile.Wall);
-          else if (t === Tile.Soil) dirt++;
-          else if (t === Tile.Wall) stone++;
-        }
-      if (dirt + stone > 0) expect(dirt, `seed ${seed}`).toBeGreaterThan(stone); // one-room floors may have no inner walls at all
-      const dist = distanceMap(map.tiles, map.w, map.h, map.entrance);
-      for (let i = 0; i < map.tiles.length; i++) if (isWalkable(map.tiles[i]!)) expect(dist[i]).toBeGreaterThanOrEqual(0);
+  it('some rooms are paved stone; you dig from dirt ground under walls, never from or into paved stone', () => {
+    let paved = 0;
+    for (let seed = 1; seed <= 60; seed++) if (generateFloor(seed, 4, 1).tiles.includes(Tile.StoneFloor)) paved++;
+    expect(paved).toBeGreaterThan(15);
+    expect(isWalkable(Tile.StoneFloor)).toBe(true);
+    expect(isDiggableGround(Tile.StoneFloor)).toBe(false);
+    expect(isDiggableGround(Tile.Floor)).toBe(true);
+    const { game, a, dir } = withSoil();
+    game.map.tiles[a.y * game.map.w + a.x] = Tile.StoneFloor;
+    expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
+    expect(digVerdict(game, 'a', dir).reason).toMatch(/Paved stone/);
+  });
+
+  it('floor 2 introduces burrowing: a Heartstone in a gated pen you can only reach by digging under the gate', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const game = createGame(seed, [{ id: 'a', name: 'A', color: 1 }], 2);
+      const { map } = game;
+      const heart = map.hearts[0]!;
+      // Fully fenced: every tile two steps out is a gate.
+      for (let dy = -2; dy <= 2; dy++)
+        for (let dx = -2; dx <= 2; dx++)
+          if (Math.max(Math.abs(dx), Math.abs(dy)) === 2) expect(map.tiles[(heart.y + dy) * map.w + heart.x + dx]).toBe(Tile.Gate);
+      // Not reachable on foot...
+      const walking = distanceMap(map.tiles, map.w, map.h, map.entrance);
+      expect(walking[(heart.y + 1) * map.w + heart.x]).toBe(-1);
+      // ...and it never cuts off anything else: every walkable tile outside the pen is reachable on foot.
+      for (let i = 0; i < map.tiles.length; i++) {
+        const inside = Math.max(Math.abs((i % map.w) - heart.x), Math.abs(Math.floor(i / map.w) - heart.y)) <= 1;
+        if (!inside && isWalkable(map.tiles[i]!)) expect(walking[i], `seed ${seed}`).toBeGreaterThanOrEqual(0);
+      }
+      // ...but some spot outside the gate can dig in.
+      let canDigIn = false;
+      for (const [ox, oy, d] of [[3, 0, 'w'], [-3, 0, 'e'], [0, 3, 'n'], [0, -3, 's']] as const) {
+        const x = heart.x + ox;
+        const y = heart.y + oy;
+        if (planTunnel(game, x, y, d)) canDigIn = true;
+      }
+      expect(canDigIn, `seed ${seed}`).toBe(true);
     }
-    expect(isWalkable(Tile.Soil)).toBe(false);
-    expect(beamCellOf(Tile.Soil)).toBe('wall');
+  });
+
+  it('the server answers "can I dig here?" with a reason when it can\'t', () => {
+    const { game, a, dir } = withSoil();
+    expect(digVerdict(game, 'a', dir)).toEqual({ ok: true, reason: '' });
+    a.braces = 0;
+    expect(digVerdict(game, 'a', dir).reason).toBe('No burrow braces left');
   });
 
   it('digging takes 3 seconds standing still, uses a burrow brace, and the tunnel goes both ways', () => {
@@ -948,15 +980,16 @@ describe('burrowing', () => {
     expect(planTunnel(game, a.x, a.y, dir)).toBeNull();
   });
 
-  it("can't dig where there's no dirt (open floor, or stone)", () => {
+  it("can't dig toward open floor, or come up in paved stone", () => {
     const game = createGame(1, [{ id: 'a', name: 'A', color: 1 }]);
     const { map } = game;
     const a = game.players.get('a')!;
-    // Toward open floor: nothing to dig.
+    // Toward open floor: no wall to go under.
     const open = (['n', 's', 'e', 'w'] as const).find((d) => isWalkable(tileAt(map, a.x + DIRS[d][0], a.y + DIRS[d][1])));
     expect(planTunnel(game, a.x, a.y, open!)).toBeNull();
-    // Into stone: no.
-    map.tiles[(a.y - 1) * map.w + a.x] = Tile.Wall;
-    expect(planTunnel(game, a.x, a.y, 'n')).toBeNull();
+    // A good dig spot stops working if the far side is paved.
+    const spot = withSoil();
+    spot.game.map.tiles[spot.plan.b] = Tile.StoneFloor;
+    expect(planTunnel(spot.game, spot.a.x, spot.a.y, spot.dir)).toBeNull();
   });
 });

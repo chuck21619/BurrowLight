@@ -6,7 +6,6 @@ import {
   gloomFootprint,
   LANTERN_RADIUS,
   MAX_QUEUED_INTENTS,
-  MAX_TUNNEL_SOIL,
   SUNSHAFT_RADIUS,
   TORCH_RADIUS,
   Tile,
@@ -30,7 +29,6 @@ import {
   type ServerMessage,
 } from '@burrowlight/shared';
 import { SRC, makeTextures, type Textures } from './textures';
-import { isWalkable as isWalkableTile } from '@burrowlight/shared';
 
 const SCALE = 3;
 const TILE = SRC * SCALE; // 48 px on screen
@@ -44,7 +42,7 @@ const SEE_FRIEND_IN_DARK = 2;
 /** Hold a direction into soft soil this long to start digging. */
 const PUSH_TO_DIG_MS = 350;
 /** How long the "Dig here?" question waits for an answer. */
-const DIG_PROMPT_MS = 5000;
+const DIG_PROMPT_MS = 8000;
 /** Every critter's outline in the dark is the same dark purple, not its own color. */
 const DARK_OUTLINE = 0x7a5cb8;
 const LABEL_STACK_PX = 15;
@@ -111,6 +109,8 @@ interface Heart {
   charge: number;
   max: number;
   bar: Graphics;
+  /** Heartstones glow faintly even in the dark, so you can always see where they are. */
+  glow: Sprite;
 }
 
 interface Gloom {
@@ -203,6 +203,14 @@ export class GameView {
   onPartyChange: (players: PartyMember[]) => void = () => {};
   onObjective: (o: Objective) => void = () => {};
   onRunOver: () => void = () => {};
+  /** A short how-to-play hint for the first floors, or null. */
+  onTip: (tip: string | null) => void = () => {};
+  private floor = 1;
+  private everLit = false;
+  private gateSeen = false;
+  /** Has this player been through a tunnel yet (for the floor-2 tip)? */
+  private everBurrowed = false;
+  private lastTip: string | null | undefined = undefined;
   onDebug: (text: string) => void = () => {};
 
   constructor(private send: (msg: ClientMessage) => void) {}
@@ -227,6 +235,8 @@ export class GameView {
 
   loadWelcome(msg: Welcome): void {
     this.you = msg.you;
+    this.floor = msg.floor;
+    this.gateSeen = false;
     this.tickMs = msg.tickMs;
     this.serverTick = msg.tick;
     this.w = msg.w;
@@ -261,7 +271,11 @@ export class GameView {
       const bar = new Graphics();
       bar.position.set((idx % this.w) * TILE, Math.floor(idx / this.w) * TILE);
       this.markerLayer.addChild(bar);
-      const heart = { idx, charge: msg.heartCharge[k] ?? 0, max: msg.heartMax[k] ?? 60, bar };
+      const glow = new Sprite(this.tex.heartstone);
+      glow.position.set((idx % this.w) * TILE, Math.floor(idx / this.w) * TILE);
+      glow.scale.set(SCALE);
+      this.markerLayer.addChild(glow);
+      const heart = { idx, charge: msg.heartCharge[k] ?? 0, max: msg.heartMax[k] ?? 60, bar, glow };
       this.drawHeartBar(heart);
       return heart;
     });
@@ -456,6 +470,7 @@ export class GameView {
       this.tileSprites[i] = s;
       this.tileLayer.addChild(s);
       if (type === Tile.Sunshaft) this.sunshafts.push(i);
+      if (type === Tile.Gate) this.gateSeen = true;
       if (type === Tile.StairsDown) this.stairsIdx = i;
     }
     if (flat.length) this.lightDirty = true;
@@ -473,8 +488,10 @@ export class GameView {
         return this.tex.heartstone;
       case Tile.Sunbeam:
         return this.tex.sunbeam;
-      case Tile.Soil:
-        return this.tex.soil;
+      case Tile.StoneFloor:
+        return this.tex.stoneFloor;
+      case Tile.Gate:
+        return this.tex.gate;
       default:
         return this.tex.floor[hashSeed(x, y) % this.tex.floor.length]!;
     }
@@ -529,6 +546,8 @@ export class GameView {
         a.label.text = a.panic ? `${a.info.name} !!` : a.info.name;
       }
       if (id === this.you) {
+        // A jump of more than one tile is a trip through a tunnel.
+        if (!snap && Math.max(Math.abs(x - this.serverX), Math.abs(y - this.serverY)) > 1) this.everBurrowed = true;
         this.serverX = x;
         this.serverY = y;
         if (snap || performance.now() - this.litToggledAt > LANTERN_PREDICT_MS) this.myLit = a.lit;
@@ -621,20 +640,24 @@ export class GameView {
     this.pushSoilSince = 0;
   };
 
-  /** Why a dig from here wouldn't work, as far as we can see; null if it might. */
-  private digProblem(me: Avatar, dx: number, dy: number): string | null {
-    // Standing on a tunnel opening and pushing into its soil: you probably want to go through it.
-    const here = me.ty * this.w + me.tx;
-    for (const t of this.tunnels.values()) if (t.a === here || t.b === here) return 'Press Q to burrow through';
-    if (me.braces <= 0) return 'No burrow braces left';
-    let n = 1;
-    while (n <= MAX_TUNNEL_SOIL && this.knownTile(me.tx + dx * n, me.ty + dy * n) === Tile.Soil) n++;
-    const out = this.tiles[(me.ty + dy * n) * this.w + me.tx + dx * n];
-    if (out !== undefined && out !== UNKNOWN && !isWalkableTile(out)) return "Can't dig here";
-    const a = me.ty * this.w + me.tx;
-    const b = (me.ty + dy * n) * this.w + me.tx + dx * n;
-    for (const t of this.tunnels.values()) if (t.a === a || t.b === a || t.a === b || t.b === b) return 'Already a tunnel here';
-    return null;
+  /** The server's answer to "can I dig here?": ask to confirm, or say why not. */
+  digCheck(msg: Extract<ServerMessage, { t: 'digCheck' }>): void {
+    const me = this.avatars.get(this.you);
+    if (!me) return;
+    if (!msg.ok) {
+      this.say(me, msg.reason);
+      return;
+    }
+    // Spending a brace is a big decision: ask first.
+    this.clearDigPrompt();
+    const text = new Text({
+      text: `Dig under here? Uses ${me.braces === 1 ? 'your burrow brace' : '1 burrow brace'}. Press Enter`,
+      style: { fontFamily: 'Trebuchet MS, sans-serif', fontSize: 13, fill: 0xf2cc8f, stroke: { color: 0x0b0a10, width: 3 } },
+    });
+    text.anchor.set(0.5, 1);
+    text.zIndex = 9999;
+    this.entityLayer.addChild(text);
+    this.digPrompt = { dir: msg.dir, at: me.ty * this.w + me.tx, since: performance.now(), text };
   }
 
   private clearDigPrompt(): void {
@@ -729,19 +752,9 @@ export class GameView {
         // Pushing into soft soil for a moment starts digging a tunnel under it.
         const [ddx, ddy] = DIRS[dir];
         const ahead = this.knownTile(me.tx + ddx, me.ty + ddy);
-        const pushing = !isDiagonal(dir) && held === dir && (ahead === Tile.Soil || ahead === Tile.Wall);
+        const pushing = !isDiagonal(dir) && held === dir && (ahead === Tile.Wall || ahead === Tile.Gate);
         if (!pushing) {
           this.pushSoilSince = 0;
-          return;
-        }
-        if (ahead === Tile.Wall) {
-          // Stone: say so once per push, so walking into walls is never a mystery.
-          if (this.pushHandled) return;
-          if (!this.pushSoilSince) this.pushSoilSince = now;
-          if (now - this.pushSoilSince < PUSH_TO_DIG_MS) return;
-          this.pushSoilSince = 0;
-          this.pushHandled = true;
-          if (this.tiles[(me.ty + ddy) * this.w + me.tx + ddx] === Tile.Wall) this.say(me, 'Stone: too hard to dig');
           return;
         }
         if (this.pushHandled) return; // already answered this push; let go to try again
@@ -749,21 +762,8 @@ export class GameView {
         if (now - this.pushSoilSince < PUSH_TO_DIG_MS) return;
         this.pushSoilSince = 0;
         this.pushHandled = true;
-        const problem = this.digProblem(me, ddx, ddy);
-        if (problem) {
-          this.say(me, problem);
-          return;
-        }
-        // Spending a brace is a big decision: ask first.
-        this.clearDigPrompt();
-        const text = new Text({
-          text: `Dig here? Uses ${me.braces === 1 ? 'your burrow brace' : '1 burrow brace'}. Press Enter`,
-          style: { fontFamily: 'Trebuchet MS, sans-serif', fontSize: 13, fill: 0xf2cc8f, stroke: { color: 0x0b0a10, width: 3 } },
-        });
-        text.anchor.set(0.5, 1);
-        text.zIndex = 9999;
-        this.entityLayer.addChild(text);
-        this.digPrompt = { dir: dir as 'n' | 's' | 'e' | 'w', at: me.ty * this.w + me.tx, since: now, text };
+        // Ask the server, which can see behind the wall: the prompt only appears for a dig that will work.
+        this.send({ t: 'checkDig', dir: dir as 'n' | 's' | 'e' | 'w' });
         return;
       }
       this.pushSoilSince = 0;
@@ -838,6 +838,13 @@ export class GameView {
       s.visible = this.tiles[i] !== UNKNOWN || this.torches.get(i) === true;
       s.tint = light.glow[i]! > 0 ? lightTint(light.glow[i]!) : MEMORY_TINT;
     }
+    for (const h of this.hearts) {
+      const lit = light.glow[h.idx]! > 0;
+      h.glow.tint = lit ? lightTint(light.glow[h.idx]!) : 0x8fa6dd;
+      h.glow.alpha = lit ? 1 : 0.8;
+    }
+    if (this.myLit) this.everLit = true;
+    this.updateTip();
     this.light = light;
     for (let i = 0; i < this.tileSprites.length; i++) {
       const s = this.tileSprites[i];
@@ -1152,6 +1159,24 @@ export class GameView {
         braces: a.braces,
       })),
     );
+  }
+
+  /** Hints for the first floors: how light works on floor 1, how burrowing works on floor 2. */
+  private updateTip(): void {
+    let tip: string | null = null;
+    const unfinished = this.hearts.some((h) => h.charge < h.max);
+    if (this.floor === 1) {
+      if (this.open) tip = 'The hatch is open! Everyone stand on the ladder to go down.';
+      else if (!this.everLit) tip = "It's dark down here. Press Space to light your lantern. It burns oil, so use it wisely.";
+      else tip = 'Find the Heartstone (look for its glow) and stand near it with your lantern lit. More light charges it faster.';
+    } else if (this.floor === 2 && unfinished) {
+      if (this.gateSeen && this.tunnels.size === 0) tip = 'That Heartstone is fenced in. Walk into the gate and hold to dig under it.';
+      else if (this.tunnels.size > 0 && !this.everBurrowed) tip = 'Stand on a tunnel hole and press Q to burrow through.';
+    }
+    if (tip !== this.lastTip) {
+      this.lastTip = tip;
+      this.onTip(tip);
+    }
   }
 
   private emitObjective(): void {

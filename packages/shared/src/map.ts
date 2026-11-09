@@ -11,8 +11,10 @@ export const Tile = {
   Heartstone: 4,
   /** Walkable floor where a crack of sunlight shines one straight beam. */
   Sunbeam: 5,
-  /** Soft soil: blocks movement and light like a wall, but critters can tunnel under it. */
-  Soil: 6,
+  /** Paved stone floor: walkable, but too hard to dig a tunnel from or into. */
+  StoneFloor: 6,
+  /** Iron bars: block walking and light like a wall (critters can tunnel under them). */
+  Gate: 7,
 } as const;
 export type TileType = (typeof Tile)[keyof typeof Tile];
 
@@ -49,13 +51,19 @@ export interface FloorMap {
   gloomStart?: Point;
   /** Boss rooms: the lit torch the Gloom eats in its introduction. */
   introTorch?: Point;
+  /** Floor 2: index of the room holding the gated Heartstone pen. */
+  penRoom?: number;
 }
 
 export const isWalkable = (t: number): boolean =>
-  t === Tile.Floor || t === Tile.StairsDown || t === Tile.Sunshaft || t === Tile.Sunbeam;
-export const blocksSight = (t: number): boolean => t === Tile.Wall || t === Tile.Soil;
+  t === Tile.Floor || t === Tile.StairsDown || t === Tile.Sunshaft || t === Tile.Sunbeam || t === Tile.StoneFloor;
+export const blocksSight = (t: number): boolean => t === Tile.Wall || t === Tile.Gate;
 export const beamCellOf = (t: number): BeamCell =>
-  t === Tile.Wall || t === Tile.Soil ? 'wall' : t === Tile.Heartstone ? 'absorb' : 'open';
+  t === Tile.Wall || t === Tile.Gate ? 'wall' : t === Tile.Heartstone ? 'absorb' : 'open';
+/** Ground you can dig a tunnel from, or come up in: dirt, not paved stone. */
+export const isDiggableGround = (t: number): boolean => t === Tile.Floor || t === Tile.Sunshaft;
+/** What a tunnel can pass under. */
+export const canTunnelUnder = (t: number): boolean => t === Tile.Wall || t === Tile.Gate;
 
 export function tileAt(map: FloorMap, x: number, y: number): number {
   if (x < 0 || y < 0 || x >= map.w || y >= map.h) return Tile.Wall;
@@ -78,10 +86,7 @@ export function generateFloor(seed: number, floor = 1, heartCount = 1): FloorMap
   const rng = createRng(hashSeed(seed, floor, heartCount));
   for (let attempt = 0; attempt < 100; attempt++) {
     const map = tryGenerate(rng, roomCountFor(floor, rng));
-    if (map && placeFeatures(rng, map, heartCount)) {
-      earthenWalls(rng, map);
-      return map;
-    }
+    if (map && placeFeatures(rng, map, heartCount, floor === BURROW_INTRO_FLOOR)) return map;
   }
   throw new Error(`could not generate floor for seed ${seed}`);
 }
@@ -212,7 +217,7 @@ const SAFE_START_RADIUS = 2;
  * Sunshafts, Heartstones and hidden traps. Every floor starts in a sunshaft so the party can see.
  * Heartstones go on room tiles with floor all around, so they can never cut off a path.
  */
-function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
+function placeFeatures(rng: Rng, map: FloorMap, heartCount: number, burrowIntro = false): boolean {
   const { w, tiles } = map;
   const idx = (p: Point) => p.y * w + p.x;
   const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
@@ -245,6 +250,38 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
   for (let k = 0; k < heartCount; k++) {
     // Spread across rooms; when there are more Heartstones than rooms, rooms take several.
     const room = order[k % order.length]!;
+    // Burrowing intro: the first Heartstone sits in a gated pen, visible but out of reach on foot.
+    if (burrowIntro && k === 0) {
+      const penSpots = interior(room).filter((p) => {
+        for (let dy = -2; dy <= 2; dy++)
+          for (let dx = -2; dx <= 2; dx++) {
+            const i = (p.y + dy) * w + p.x + dx;
+            if (tiles[i] !== Tile.Floor || used.has(i)) return false;
+          }
+        // Room to stand on dirt outside the gate.
+        return [[3, 0], [-3, 0], [0, 3], [0, -3]].some(([dx, dy]) => tiles[(p.y + dy!) * w + p.x + dx!] === Tile.Floor);
+      });
+      if (!penSpots.length) return false;
+      const heart = rng.pick(penSpots);
+      tiles[idx(heart)] = Tile.Heartstone;
+      map.hearts.push(heart);
+      for (let dy = -2; dy <= 2; dy++)
+        for (let dx = -2; dx <= 2; dx++) {
+          const i = (heart.y + dy) * w + heart.x + dx;
+          if (Math.max(Math.abs(dx), Math.abs(dy)) === 2) tiles[i] = Tile.Gate;
+          used.add(i);
+        }
+      // Keep the area just outside the gate clear too, so there's dirt to dig from.
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) used.add((heart.y + dy) * w + heart.x + dx);
+      // The pen must never cut anything else off: everything outside it stays reachable on foot.
+      const walkDist = distanceMap(tiles, w, map.h, map.entrance);
+      for (let i = 0; i < tiles.length; i++) {
+        const inside = Math.max(Math.abs((i % w) - heart.x), Math.abs(Math.floor(i / w) - heart.y)) <= 1;
+        if (!inside && isWalkable(tiles[i]!) && walkDist[i]! < 0) return false;
+      }
+      map.penRoom = map.rooms.indexOf(room);
+      continue;
+    }
     const spots = interior(room).filter((p) => !used.has(idx(p)) && map.hearts.every((hp) => cheb(hp, p) >= 3));
     if (spots.length === 0) return false;
     const heart = rng.pick(spots);
@@ -289,9 +326,11 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
     used.add(t.y * w + t.x);
   }
 
+  paveRooms(rng, map, entranceRoom);
+
   // Hidden traps: never near the entrance, next to a Heartstone, or on special tiles.
   for (let i = 0; i < tiles.length; i++) {
-    if (tiles[i] !== Tile.Floor || used.has(i)) continue;
+    if ((tiles[i] !== Tile.Floor && tiles[i] !== Tile.StoneFloor) || used.has(i)) continue;
     const p = { x: i % w, y: Math.floor(i / w) };
     if (cheb(p, map.entrance) <= SAFE_START_RADIUS) continue;
     if (map.hearts.some((hp) => cheb(p, hp) <= 1)) continue;
@@ -300,35 +339,24 @@ function placeFeatures(rng: Rng, map: FloorMap, heartCount: number): boolean {
   return true;
 }
 
-/** Longest stretch of soil a tunnel can go under. */
+/** Thickest wall (or gate) a tunnel can go under. */
 export const MAX_TUNNEL_SOIL = 3;
+/** Floor 2 introduces burrowing with a gated Heartstone. */
+export const BURROW_INTRO_FLOOR = 2;
+/** Chance a room (other than the entrance room and the gated pen's room) is paved with stone. */
+const PAVED_ROOM_CHANCE = 0.3;
+
 /**
- * Most walls are packed dirt that critters can tunnel under. Only the floor's outer edge and a few
- * stone outcrops are solid stone. (Dirt blocks movement and light just like stone.)
+ * Pave some rooms with stone: you can walk there, but not dig from or into them. Most ground stays
+ * dirt. The entrance room and the gated pen's room are always dirt.
  */
-function earthenWalls(rng: Rng, map: FloorMap): void {
-  const { w, h, tiles } = map;
-  const border = (x: number, y: number) => x === 0 || y === 0 || x === w - 1 || y === h - 1;
-  const dirt: number[] = [];
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if (tiles[i] === Tile.Wall && !border(x, y)) {
-        tiles[i] = Tile.Soil;
-        dirt.push(i);
-      }
-    }
-  // A few stone outcrops so not every wall can be dug through.
-  // More, and occasionally bigger, outcrops on bigger floors; small floors stay mostly dirt.
-  for (let k = rng.int(1, 1 + Math.floor(dirt.length / 80)); k > 0 && dirt.length; k--) {
-    const c = rng.pick(dirt);
-    const cx = c % w;
-    const cy = Math.floor(c / w);
-    const r = rng.chance(0.3) ? 2 : 1;
-    for (let y = cy - r; y <= cy + r; y++)
-      for (let x = cx - r; x <= cx + r; x++)
-        if (x >= 0 && y >= 0 && x < w && y < h && tiles[y * w + x] === Tile.Soil) tiles[y * w + x] = Tile.Wall;
-  }
+function paveRooms(rng: Rng, map: FloorMap, entranceRoom: Rect): void {
+  const { w, tiles } = map;
+  map.rooms.forEach((r, k) => {
+    if (r === entranceRoom || k === map.penRoom || !rng.chance(PAVED_ROOM_CHANCE)) return;
+    for (let y = r.y; y < r.y + r.h; y++)
+      for (let x = r.x; x < r.x + r.w; x++) if (tiles[y * w + x] === Tile.Floor) tiles[y * w + x] = Tile.StoneFloor;
+  });
 }
 
 /** Matches TORCH_RADIUS in rules (kept here to avoid an import cycle). */

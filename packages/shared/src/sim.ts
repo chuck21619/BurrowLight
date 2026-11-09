@@ -2,8 +2,9 @@ import { traceBeam, type MirrorOrient } from './beam';
 import { computeLight, type LightMap, type LightSource } from './light';
 import {
   MAX_TUNNEL_SOIL,
-  Tile,
   beamCellOf,
+  canTunnelUnder,
+  isDiggableGround,
   generateBossFloor,
   generateFloor,
   isWalkable,
@@ -713,23 +714,49 @@ function reveal(state: GameState, i: number): void {
 export const heartIndex = (state: GameState, h: { x: number; y: number }): number => h.y * state.map.w + h.x;
 
 /**
- * Where a tunnel dug from (x, y) in `dir` would go: under 1–3 tiles of soft soil to the walkable tile
- * on the other side. Null if there's no soil there, it's too thick, or there's nowhere to come out.
+ * Where a tunnel dug from (x, y) in `dir` would go: from dirt ground, under 1–3 tiles of wall or gate,
+ * up into dirt ground on the other side. Null if you're on paved stone, there's no wall, it's too
+ * thick, or the far side isn't dirt.
  */
 export function planTunnel(state: GameState, x: number, y: number, dir: 'n' | 's' | 'e' | 'w'): { a: number; b: number } | null {
   const [dx, dy] = DIRS[dir];
   const { map } = state;
+  // You dig down from dirt ground, under 1–3 tiles of wall (or gate), and up into dirt ground.
+  if (!isDiggableGround(tileAt(map, x, y))) return null;
   let n = 1;
-  while (n <= MAX_TUNNEL_SOIL && tileAt(map, x + dx * n, y + dy * n) === Tile.Soil) n++;
-  if (n === 1) return null; // no soil next to you
+  while (n <= MAX_TUNNEL_SOIL && canTunnelUnder(tileAt(map, x + dx * n, y + dy * n))) n++;
+  if (n === 1) return null; // no wall next to you
   const ox = x + dx * n;
   const oy = y + dy * n;
-  if (!isWalkable(tileAt(map, ox, oy))) return null;
+  if (!isDiggableGround(tileAt(map, ox, oy))) return null;
   const a = y * map.w + x;
   const b = oy * map.w + ox;
   // One tunnel per spot: don't dig where a tunnel already starts or ends.
   if (state.tunnels.some((t) => t.a === a || t.b === a || t.a === b || t.b === b)) return null;
   return { a, b };
+}
+
+/**
+ * Can this critter dig in `dir` right now? The server answers this before the game asks the player to
+ * spend a brace, so the "Dig here?" prompt never offers a dig that would fail.
+ */
+export function digVerdict(state: GameState, playerId: string, dir: 'n' | 's' | 'e' | 'w'): { ok: boolean; reason: string } {
+  const p = state.players.get(playerId);
+  if (!p) return { ok: false, reason: "Can't dig here" };
+  const { map } = state;
+  const here = p.y * map.w + p.x;
+  if (state.tunnels.some((t) => t.a === here || t.b === here)) return { ok: false, reason: 'Press Q to burrow through' };
+  if (p.braces <= 0) return { ok: false, reason: 'No burrow braces left' };
+  if (!isDiggableGround(tileAt(map, p.x, p.y))) return { ok: false, reason: 'Paved stone: too hard to dig' };
+  const [dx, dy] = DIRS[dir];
+  let n = 1;
+  while (n <= MAX_TUNNEL_SOIL && canTunnelUnder(tileAt(map, p.x + dx * n, p.y + dy * n))) n++;
+  if (n === 1) return { ok: false, reason: "Can't dig here" };
+  const out = tileAt(map, p.x + dx * n, p.y + dy * n);
+  if (canTunnelUnder(out)) return { ok: false, reason: 'Too thick to dig under' };
+  if (!isDiggableGround(out)) return { ok: false, reason: "Can't dig here" };
+  if (!planTunnel(state, p.x, p.y, dir)) return { ok: false, reason: 'Already a tunnel here' };
+  return { ok: true, reason: '' };
 }
 
 /** Tunnels as [endA, endB, ownerId] triples. */

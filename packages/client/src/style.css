@@ -322,6 +322,21 @@ button.primary {
   border-radius: 8px;
 }
 
+#tip {
+  position: absolute;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 32px));
+  background: rgba(43, 34, 56, 0.92);
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  padding: 8px 14px;
+  color: var(--text);
+  text-align: center;
+  font-size: 14px;
+}
+
 #debug {
   position: absolute;
   right: 12px;

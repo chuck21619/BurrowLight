@@ -8,7 +8,9 @@ export type ClientMessage =
   | { t: 'ready'; ready: boolean }
   | { t: 'start' }
   | { t: 'intent'; seq: number; action: Action }
-  | { t: 'lantern'; on: boolean };
+  | { t: 'lantern'; on: boolean }
+  /** Ask whether a dig in `dir` would work, before asking the player to spend a brace. */
+  | { t: 'checkDig'; dir: 'n' | 's' | 'e' | 'w' };
 
 // ---- Server -> client ----
 export interface LobbyPlayer {
@@ -47,6 +49,8 @@ export type PlayerPos = [
 
 export type ServerMessage =
   | { t: 'error'; message: string }
+  /** The answer to `checkDig`: `reason` explains a no. */
+  | { t: 'digCheck'; dir: 'n' | 's' | 'e' | 'w'; ok: boolean; reason: string }
   | { t: 'lobby'; code: string; you: string; token: string; hostId: string; players: LobbyPlayer[] }
   | {
       t: 'welcome';

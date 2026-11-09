@@ -17,6 +17,7 @@ import {
   packGloom,
   packTorches,
   packTunnels,
+  digVerdict,
   step,
   type Action,
   type GameState,
@@ -139,6 +140,13 @@ export class Room {
 
   intent(memberId: string, seq: number, action: Action): void {
     if (this.game) queueIntent(this.game, memberId, seq, action);
+  }
+
+  checkDig(memberId: string, dir: 'n' | 's' | 'e' | 'w'): void {
+    const m = this.members.get(memberId);
+    if (!this.game || !m?.peer) return;
+    const v = digVerdict(this.game, memberId, dir);
+    send(m.peer, { t: 'digCheck', dir, ok: v.ok, reason: v.reason });
   }
 
   lantern(memberId: string, on: boolean): void {
